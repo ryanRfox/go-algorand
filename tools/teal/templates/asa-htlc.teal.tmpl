@@ -1,0 +1,95 @@
+// Implements a hashed timelock contract (HTLC) for Algorand Standard Assets (ASA).
+//
+// This is a contract account comprised of three validation scenarios:
+//
+// 1. An "opt-in" transaction is required to initialize this account to hold the designated `TMPL_ASA_ID`
+// Money is released under two circumstances:
+// 2. To TMPL_RCV if TMPL_HASHFN(arg_0) = TMPL_HASHIMG
+// 3. To TMPL_OWN if txn.FirstValid > TMPL_TIMEOUT
+//
+// Parameters:
+//  - `TMPL_RCV`:     the address to send funds to when the preimage is supplied
+//  - `TMPL_HASHFN`:  the specific hash function (`sha256` or `keccak256`) to use
+//  - `TMPL_HASHIMG`: the image of the hash function for which knowing the preimage under `TMPL_HASHFN` 
+//                    will release funds
+//  - `TMPL_TIMEOUT`: the round after which funds may be closed out to `TMPL_OWN`
+//  - `TMPL_OWN`:     the address to refund funds to on timeout
+//  - `TMPL_ASA_ID`:  the assetid of the ASA the contract may hold
+//  - `TMPL_FEE`:     maximum fee of any transactions approved by this contract
+//
+// Code Overview:
+// ( (Scenario 1) OR  ( (         Scenario 2          ) OR  (     Scenario 3      ) ) AND Fee )
+// ( (  Opt-in  ) bnz ( ( Time Lock: ( ASA || Algos ) ) bnz ( Hash Lock: ASA Only ) ) &&  Fee )
+//
+// A detailed description of the code and a walkthrough are provided:
+// https://github.com/ryanRfox/go-algorand/blob/template-asa-htlc/tools/teal/templates/docs/asa-htlc.teal.md
+//
+//
+txn TypeEnum
+int AssetTransfer
+==
+txn AssetSender
+global ZeroAddress
+==
+&&
+txn AssetCloseTo
+global ZeroAddress
+==
+&&
+txn AssetAmount
+int 0
+==
+&&
+txn XferAsset
+int TMPL_ASA_ID
+==
+&&
+dup
+bnz opt-in_pass
+pop
+txn CloseRemainderTo
+addr TMPL_OWN
+==
+txn Receiver
+addr TMPL_OWN
+== 
+&&
+txn AssetCloseTo
+addr TMPL_OWN
+==
+txn AssetReceiver
+addr TMPL_OWN
+== 
+&&
+||
+txn FirstValid
+int 200000
+>
+&&
+dup
+bnz time-lock_pass
+pop
+txn AssetCloseTo
+addr TMPL_RCV
+==
+txn AssetReceiver
+addr TMPL_RCV
+==
+&&
+arg 0
+len
+int 32
+==
+&&
+arg 0
+TMPL_HASHFN
+byte b64 TMPL_HASHIMG
+==
+&&
+time-lock_pass:
+opt-in_pass:
+txn Fee
+int 1000000
+<
+&&
+
