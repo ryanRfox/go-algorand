@@ -63,7 +63,7 @@ addr TMPL_OWN
 &&
 ||
 txn FirstValid
-int 200000
+int TMPL_TIMEOUT
 >
 &&
 dup
@@ -89,7 +89,7 @@ byte b64 TMPL_HASHIMG
 time-lock_pass:
 opt-in_pass:
 txn Fee
-int 1000000
+int TMPL_FEE
 <
 &&
 
