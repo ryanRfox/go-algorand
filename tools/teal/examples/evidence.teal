@@ -1,0 +1,141 @@
+// Variables
+// DATA=betanetdata
+// ACCOUNT_A=E33Y6VPY7LIXADZ5WMDKBHGBPRBMDLKMPJ7QBRCBUXBUL5722MCIEMCBOU # demo wallet
+// ACCOUNT_B=RZW5QPI4X7NZXUKFJZXOU3F5QQR7Q7MW5ZG3467XDWTMGO3YDUW3YCIJPQ # remote
+// ACCOUNT_MSIG=2J42MCHEYN2HBGWLYGBTFHTONFX6IJGD2JMGCTKBKT5OXOJYGHW76GVBRU # ACCOUNT_A & ACCOUNT_B
+// AMOUNT_INITIAL=100000
+// EVIDENCE_ACCOUNT=5WYL7NOE4TCXQM57OC3IF774UPU4JKDHC24WW2QYGD747GZZX55WP4KNEM
+// EVIDENCE_ACCOUNT_B64=NVdZTDdOT0U0VENYUU01N09DM0lGNzc0VVBVNEpLREhDMjRXVzJRWUdENzQ3R1paWDU1V1A0S05FTQ==
+
+
+//// FEES
+// TODO: Need to check fees for 1 or 2 transactions
+
+//// INITIAL LOGIC TESTS
+global GroupSize
+int 2
+==
+bnz expiration
+
+//// DISPUTE
+// Define the index for this EC
+int 0 // TODO: TMPL_INDEX
+
+// TODO: handle index check
+int 0
+==
+
+//// CLAIM
+txn Sender
+addr 2J42MCHEYN2HBGWLYGBTFHTONFX6IJGD2JMGCTKBKT5OXOJYGHW76GVBRU // TODO: TMPL_ACCOUNT_MSIG
+==
+&&
+
+txn TypeEnum 
+int Payment
+==
+&&
+
+txn Amount
+int 0
+==
+&&
+
+// Validate transaction Receiver is arg_0
+txn Receiver
+arg_0  // EC addr
+==
+&&
+
+// Validate transaction closes to is arg_0
+txn CloseRemainderTo	
+arg_0  // EC addr
+==
+&&
+
+// Validate arg_0 has proper signature from TMPL_ACCOUNT_A
+arg_0  // data (EC addr)
+arg_1  // signature_a
+addr E33Y6VPY7LIXADZ5WMDKBHGBPRBMDLKMPJ7QBRCBUXBUL5722MCIEMCBOU  // TODO: TMPL_ACCOUNT_A)
+ed25519verify
+
+// Validate arg_0 has proper signature from TMPL_ACCOUNT_B
+arg_0  // data (EC addr)
+arg_2  // signature_b
+addr RZW5QPI4X7NZXUKFJZXOU3F5QQR7Q7MW5ZG3467XDWTMGO3YDUW3YCIJPQ // TODO: TMPL_ACCOUNT_B)
+ed25519verify
+
++     // Add results of signature validations
+int 2 // Define the msig threshold
+==    // Validate both signatures signed arg_0
+&&
+
+bnz pass
+err // something did not evaluate for a proper claim
+
+//// EXPIRATION
+expiration:
+
+// Load FirstValid from transaction
+gtxn 0 FirstValid
+
+// Define the first block number this contract will approve a transaction
+int 1150000 // TODO: TMPL_EXPIRATION
+
+// Validate FirstValid >= TMPL_EXPIRATION
+>=
+
+// Validate transaction type is payment
+gtxn 0 TypeEnum 
+int Payment
+==
+&&
+
+gtxn 1 TypeEnum 
+int Payment
+==
+&&
+
+// Validate the first transaction pays to TMPL_ACCOUNT_A
+gtxn 0 Receiver
+addr E33Y6VPY7LIXADZ5WMDKBHGBPRBMDLKMPJ7QBRCBUXBUL5722MCIEMCBOU // TODO: TMPL_ACCOUNT_A
+==
+&&
+
+// Validate the first transaction does not include close to
+gtxn 0 CloseRemainderTo	
+global ZeroAddress
+==
+&&
+
+// Validate the second transaction pays to TMPL_ACCOUNT_B
+gtxn 1 Receiver	
+addr RZW5QPI4X7NZXUKFJZXOU3F5QQR7Q7MW5ZG3467XDWTMGO3YDUW3YCIJPQ // TODO: TMPL_ACCOUNT_B
+==
+&&
+
+// Validate the second transaction closes the remaining balance to TMPL_ACCOUNT_B
+gtxn 1 CloseRemainderTo	
+addr RZW5QPI4X7NZXUKFJZXOU3F5QQR7Q7MW5ZG3467XDWTMGO3YDUW3YCIJPQ // TODO: TMPL_ACCOUNT_B
+==
+&&
+
+// TODO: Is validating from global zeroAddress required, or implicite?
+
+// Define Payout amounts
+int 100000
+gtxn 0 Amount
+==
+&&
+
+// Define Payout amounts
+int 100000
+gtxn 1 Amount
+==
+&&
+
+bnz pass
+err
+
+pass:
+int 1

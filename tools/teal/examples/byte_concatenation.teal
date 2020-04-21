@@ -1,0 +1,36 @@
+byte edb0bfb5c4e4c57833bf70b682fffca3e9c4a86716b96b6a1830ffcf9b39bf7b
+byte edb0bfb5c4e4c57833bf70b682fffca3e9c4a86716b96b6a1830ffcf9b39bf7b
+&
+sha256
+
+byte ed b0 bf b5 c4 e4 c5 78 33 bf 70 b6 82 ff fc a3 e9 c4 a8 67 16 b9 6b 6a 18 30 ff cf 9b 39 bf 7b
+byte ed b0 bf b5 c4 e4 c5 78 33 bf 70 b6 82 ff fc a3 e9 c4 a8 67 16 b9 6b 6a 18 30 ff cf 9b 39 bf 7b
+&
+sha256
+
+arg_0
+arg_1
+.       // new operator: bytes concatenate bytes => bytes
+sha256
+
+arg_0  // 32 bytes
+btoi   // uint64
+arg_1  // 32 bytes
+btoi   // uint64
+&      // uint64 concatenate uint64 => uint64
+itob   // 32 bytes
+sha256 // 32 bytes
+
+## User Story:
+As a TEAL user I desire the ability to concatenate two stack elements of type `bytes` so the resulting value may be processed later in the program.
+
+## Example Scenario:
+Sample TEAL code snipit of desired functionality:
+```
+arg_0
+arg_1
+.       // new operator: bytes concatenate bytes => bytes
+sha256
+```
+In this scenario the program is loading two `bytes` type elements onto the stack. A new operator is introduced as `.` which intends to concatenate the top two stack elements, both of type `bytes`, then return `bytes` to the stack. Note: the stack will now contain a number of bytes equal to the sum of bytes `arg_0` and `arg_1`. Finally, the concatenated bytes are hashed, leaving 32 bytes on the stack and the prgram continues.
+
