@@ -1,12 +1,12 @@
 # Payment Channel Tutorial
 
-This is an example payment channel implementation using TEAL on the Algorand network. It allows two (2) accounts to establish and fund an on-chain multisig account then perform off-line state updates in a seriese of evidence contracts which represend revokable TEAL programs defining on-chain settlement of the escrowed assets to accounts. Payment channels are best known as the primative used to hold funds in the Bitcoin Lightning Network. 
+This is an example payment channel implementation using TEAL on the Algorand network. It allows two (2) accounts to establish and fund an on-chain multisig account then perform off-line state updates in a series of evidence contracts which represent revocable TEAL programs defining on-chain settlement of the escrowed assets to accounts. Payment channels are best known as the primitive used to hold funds in the Bitcoin Lightning Network. 
 
 TAGS: [ payment channel ] [ layer two ] [ multisig ] [ goal ] [ algokey ] [ bash ] [ TEAL ] [ tealsign ] [ ed25519verify ] [ bitwise and ]
 
 ## Example Scenario
 
-Alice and Bob intend to form a payment channel to escrow some Algos on-chain, then perform a series off-chain balance updates, and finally settle the most recent balance state to their respective accounts some time in the future. Figure 1. illustrates the workflow Alice and Bob will perform. 
+Alice and Bob intend to form a payment channel to escrow some Algos on-chain, then perform a series off-chain balance updates, and finally settle the most recent balance state to their respective accounts sometime in the future. Figure 1. illustrates the workflow Alice and Bob will perform. 
 
 `TODO: Insert Workflow Image`
 
@@ -14,17 +14,16 @@ Figure 2. below provides a visual representation of the components used in the p
 
 ![Figure 2](figure2.png "Figure 2.")
 
-
 ### Shapes
 
 - _Accounts_ are represented with the triangle (one each for Alice and Bob)
-- _Multisig Escorw Account_ is represened with a star shape
+- _Multisig Escrow Account_ is represented with a star shape
 - _Transactions_ are represented with rectangles
 - _Transaction Group_ is represented with a square (multiple transactions represented within)
 - _Evidence Contracts_ (TEAL programs) are represented with a clipped corner rectangle
 - _TEAL Clauses_ are represented by rectangle with an arrow
   - Required _arguments_ are represented on the arrow path
-  - The arrow points to an unsigned transaction represending the _LogicSig_
+  - The arrow points to an unsigned transaction representing the _LogicSig_
 - _Arguments_ (base64 data) passed with a transaction are represented with rounded corner rectangles
 
 ### Colors
@@ -38,7 +37,7 @@ Color is used to represent which entity signed the element
 
 ## Solution Overview
 
-There are four (4) phases in the payment chanel protocol: Initialization, Funding, Off-Chain State Updates and On-Chain Settlement.
+There are four (4) phases in the payment channel protocol: Initialization, Funding, Off-Chain State Updates and On-Chain Settlement.
 
 ### 1. INITIALIZATION
 
@@ -50,7 +49,7 @@ Alice and Bob must cooperate to form a multisig account to escrow funds within a
 
 #### EXPIRATION TRANSACTION GROUP
 
-Both parties agree how much to fund the multisig escrow account with and how long the payment channel should remain open for. This requires they negotiate, create and sign an Expiration Transaction group as a safety measure against griefing. Both Alice and Bob must retain this signed Expiration Transaction until the payment channel is closed cooperatively, else they may broadcast it after exiration to retrieve their initial funds from the multisig escrow account. 
+Both parties agree how much to fund the multisig escrow account with and how long the payment channel should remain open for. This requires they negotiate, create and sign an Expiration Transaction group as a safety measure against griefing. Both Alice and Bob must retain this signed Expiration Transaction until the payment channel is closed cooperatively, else they may broadcast it after expiration to retrieve their initial funds from the multisig escrow account. 
 
 ### 2. FUNDING
 
@@ -66,7 +65,7 @@ The Claim Transaction liquidates the assets within the multisig escrow account i
 
 #### EVIDENCE CONTRACT
 
-The Evidence Contract is LogicSig escrow account representing the most recent payment channel state. Each evidence contract contains a static nonce (48-bits) and an incrementing index (uint16). These values gaurente unique addresses per state and are used with signature verification during evidence evaluation. Each evidence contract is comprised of three (3) clauses: Dispute, Cooperate and Timeout. 
+The Evidence Contract is LogicSig escrow account representing the most recent payment channel state. Each evidence contract contains a static nonce (48-bits) and an incrementing index (uint16). These values guarantee unique addresses per state and are used with signature verification during evidence evaluation. Each evidence contract is comprised of three (3) clauses: Dispute, Cooperate and Timeout. 
 
 ##### DISPUTE
 
@@ -78,11 +77,11 @@ The Cooperate clause approves a transaction sending assets to both Alice and Bob
 
 ##### TIMEOUT
 
-The Timeout clasue approves a transaction group sending assets to both Alice and Bob at the agreed upon amounts after a timeout block height defined within TEAL code. This protects both parties against the other party failing to cooperate, allowing assets to be sent after the timeout.
+The Timeout clause approves a transaction group sending assets to both Alice and Bob at the agreed upon amounts after a timeout block height defined within TEAL code. This protects both parties against the other party failing to cooperate, allowing assets to be sent after the timeout.
 
 ### 4. ON-CHAIN SETTLEMENT
 
-The final step in the payment channel protocol is settleing the assets to acounts using the most recent state. This may achieved with a single cooperative transaction which liquidates the multisig escrow account. To fully demonstrate the payment channel updates, the remainder of the tutorial will walk through settlement using the Evidence Contract.
+The final step in the payment channel protocol is settling the assets to accounts using the most recent state. This may be achieved with a single cooperative transaction which liquidates the multisig escrow account. To fully demonstrate the payment channel updates, the remainder of the tutorial will walk through settlement using the Evidence Contract.
 
 ## TUTORIAL WALKTHROUGH
 
@@ -106,7 +105,7 @@ export ACCOUNT_B=$(algokey generate -f keys/ACCOUNT_B | tail -1 | awk '{ print $
 
 Notice a keyfile is created for each account which contains the private key. Keep these files secured offline for future use during the signing process.
 
-These new accounts must be imported into a wallet using the 25 word mnemonic encoded within each keyfile. Use `algokey` to export mnemonic string for esch accounts:
+These new accounts must be imported into a wallet using the 25-word mnemonic encoded within each keyfile. Use `algokey` to export mnemonic string for each accounts:
 
 `export ACCOUNT_A_MNEMONIC=$(algokey export -f keys/ACCOUNT_A | head -n1 | awk 'BEGIN{FS=":"} { print $2 }')`
 `export ACCOUNT_B_MNEMONIC=$(algokey export -f keys/ACCOUNT_B | head -n1 | awk 'BEGIN{FS=":"} { print $2 }')`
@@ -141,17 +140,17 @@ Alice and Bob now have an account they jointly own. Any funds within this accoun
 
 ### EXPIRATION TRANSACTION GROUP
 
-Referring to Figure 2. the expiration transaction group contains two transaction. Recall, this transaction group is intended to be held offline by both parties as a safegaurd against the other party griefing them. There are two elements to the transactions that must be agreed to by both Alice and Bob: Initial Funding Amount and Expiration.
+Referring to Figure 2. the expiration transaction group contains two transaction. Recall, this transaction group is intended to be held offline by both parties as a safeguard against the other party griefing them. There are two elements to the transactions that must be agreed to by both Alice and Bob: Initial Funding Amount and Expiration.
 
 #### Initial Funding Amount
 
-Alice and Bob will agree on the initial funding amount. Typically this is the same value for both parties, but it may be different. Set the value in microAlgos as appropriate:
+Alice and Bob will agree on the initial funding amount. Typically, this is the same value for both parties, but it may be different. Set the value in microAlgos as appropriate:
 
 `export AMOUNT_INITIAL=200000`
 
 #### Expiration
 
-Alice and Bob must also agree on the exiration time for thier payment channel. This is defined as the first valid block their expiration transaction group will be accepted by network consensus. Use `goal node status -d $DATA` to find the current _Last committed block_ value. Choose a reasonable block height in the future:
+Alice and Bob must also agree on the expiration time for their payment channel. This is defined as the first valid block their expiration transaction group will be accepted by network consensus. Use `goal node status -d $DATA` to find the current _Last committed block_ value. Choose a reasonable block height in the future:
 
 `export EXPIRATION_BLOCK_HEIGHT=2800000`
 
@@ -162,7 +161,7 @@ Alice and Bob must also agree on the exiration time for thier payment channel. T
 The Expiration Transaction is a signed grouped transaction comprised of two unsigned transactions, each sending the initial amount from the multisig account back to the respective funding accounts. Either party may generate and group the unsigned transactions using `goal`:
 
 `goal clerk send -a $AMOUNT_INITIAL -f TMPL_ACCOUNT_MSIG -t $ACCOUNT_A --firstvalid $EXPIRATION_BLOCK_HEIGHT -o expiration_a.utx -d $DATA`
-`goal clerk send -a $AMOUNT_INITIAL -f TMPL_ACCOUNT_MSIG -t $ACCOUNT_B --firstvalid $EXPIRATION_BLOCK_HEIGHT  -o expiration_b.utx -d $DATA`
+`goal clerk send -a $AMOUNT_INITIAL -f TMPL_ACCOUNT_MSIG -t $ACCOUNT_B --firstvalid $EXPIRATION_BLOCK_HEIGHT -o expiration_b.utx -d $DATA`
 `cat expiration_a.utx expiration_b.utx > expiration.utxc`
 `goal clerk group -i expiration.utxc -o expiration.utxg`
 
@@ -175,18 +174,18 @@ The two unsigned transactions are now grouped with the same identifier. Alice an
 
 Notice the elements for "pk" and "s" are added to the "msig" section within the transaction. Notice also that the `goal clerk multisig sign` command overwrites the transaction file, so Alice may sign and send their partially signed transaction to Bob and await the return of the fully signed transaction.
 
-Once both Alice and Bob posses a properly signed Expiration Transaction Group, they each will have confidence in funding their multisig escrow account. Both Alice and Bob must retain this signed transaction offline until the payment channel is closed or either party may broadcast it after exiration to retrieve their initial funds. 
+Once both Alice and Bob possess a properly signed Expiration Transaction Group, they each will have confidence in funding their multisig escrow account. Both Alice and Bob must retain this signed transaction offline until the payment channel is closed or either party may broadcast it after expiration to retrieve their initial funds. 
 
 ## 2.  FUNDING
 
-Both Alice and Bob will now cooperate to create, sign and broadcast a Funding Transaction group. This will fund the multisig escrow account with initial amounts from both parties simaltaniously because the transactions are grouped, which means they will all succeed or all fail. Use `goal` to create the transactions and group them:
+Both Alice and Bob will now cooperate to create, sign and broadcast a Funding Transaction group. This will fund the multisig escrow account with initial amounts from both parties simultaneously because the transactions are grouped, which means they will all succeed or all fail. Use `goal` to create the transactions and group them:
 
 `goal clerk send -a $AMOUNT_INITIAL -f $ACCOUNT_A -t TMPL_ACCOUNT_MSIG -o funding_a.utx --wallet "pc tutorial" -d $DATA`
 `goal clerk send -a $AMOUNT_INITIAL -f $ACCOUNT_B -t TMPL_ACCOUNT_MSIG -o funding_b.utx --wallet "pc tutorial" -d $DATA`
 `cat funding_a.utx funding_b.utx > funding.utxc`
 `goal clerk group -i funding.utxc -o funding.utxg`
 
-Alice and Bob must sign their respective transaction and combine it with the other signed transaction to form the transaction group. First, the grouped transaction must be split, then each signed by the proper account and those signed transactions contatinated:
+Alice and Bob must sign their respective transaction and combine it with the other signed transaction to form the transaction group. First, the grouped transaction must be split, then each signed by the proper account and those signed transactions concatenated:
 
 `goal clerk split -i funding.utxg -o funding.utxg`
 `goal clerk sign -i funding-0.utxg -o funding-0.stxg --wallet "pc tutorial" -d $DATA`
@@ -212,17 +211,17 @@ The Claim Transaction is quite simple, it liquidates all assets within the Multi
 
 ### Evidence Contract
 
-The Evidence Contract is a TEAL program LogicSig account. This is special kind of escorow account which contains three clauses and will only approve a transaction for the account if one of the cluases evaluates to TRUE. Reffer to Figure 2. to see the elements of the Evidence Contract.
+The Evidence Contract is a TEAL program LogicSig account. This is special kind of escrow account which contains three clauses and will only approve a transaction for the account if one of the clauses evaluates to TRUE. Refer to Figure 2. to see the elements of the Evidence Contract.
 
 #### Clauses
 
 There are three clauses, each representing evaluation criteria an associated spending transaction must provide to be approved. Examples of each are provided later in this tutorial.
 
-#### Identifires
+#### Identifiers
 
 The Evidence Contract has four identifiers: Initializer, Instance, Nonce and Index. These values are embedded within the TEAL code and used by the Clauses for evaluation. 
 
-The Initializer and the Instance are both uint64 elements comprised of canatinating two other data elements. The Initializer concats a 6-byte Nonce with a 2-byte padding. This value is static and embedded into each Evidence Contract Alice and Bob create. The Instance concats the same Nonce with an Index value that incements each time a new Evidence Contract is created. 
+The Initializer and the Instance are both uint64 elements comprised of concatenating two other data elements. The Initializer concats a 6-byte Nonce with a 2-byte padding. This value is static and embedded into each Evidence Contract Alice and Bob create. The Instance concats the same Nonce with an Index value that increments each time a new Evidence Contract is created. 
 
 ### Initialize the First Evidence Contract
 
@@ -245,7 +244,7 @@ Recall Alice and Bob each sent 200,000 microAlgos to the multisig escrow account
 
 Alice intend to send 50,000 microAlgos to Bob by updating balances within a new payment channel state. The results will be balances reflecting Alice will receive 150,000 and Bob 250,000 at closing. 
 
-Construction of the Evidence Contract requires defining Idenitifer values and the terms for each Clause.
+Construction of the Evidence Contract requires defining Identifier values and the terms for each Clause.
 
 #### Define the Contract Index
 
@@ -261,7 +260,7 @@ First, convert the contract index to uint16:
 
 `CONTRACT_INDEX_HEX=$(printf "%04X" $TMPL_CONTRACT_INDEX_INT)`
 
-Next, concatinate the Nonce and Index:
+Next, concatenate the Nonce and Index:
 
 `CONTRACT_INSTANCE_HEX=$(echo $CONTRACT_NONCE_HEX$CONTRACT_INDEX_HEX)`
 
@@ -335,11 +334,11 @@ int 2                                 // Load integer value 2
 
 #### Define the Timeout Clause
 
-The Timeout clasue allows both parties to receive their assets from the most recent evidence contract account after a defined timeout period passes. 
+The Timeout clause allows both parties to receive their assets from the most recent evidence contract account after a defined timeout period passes. 
 
 `export TMPL_FIRST_VALID=2800000`
 
-TODO: refacor TEAL checks
+TODO: refactor TEAL checks
 
 ```
 // TIMEOUT CLAUSE
@@ -383,7 +382,7 @@ addr ZeroAddress // should not be included for the second transaction
 ==
 && // AND CloseRemainderTo
 
-&&  // First transation checks AND Second transaction checks
+&&  // First transaction checks AND Second transaction checks
 
 bnz fee
 
@@ -392,12 +391,13 @@ bnz fee
 // 
 int 1
 bnz fee
+```
 
 #### Define the Cooperate Clause
 
-The Cooperate clause allows both parties to receive their assets from the evidence contract by braodcasting a grouped speding transaction which includes some specific signed data.
+The Cooperate clause allows both parties to receive their assets from the evidence contract by broadcasting a grouped spending transaction which includes some specific signed data.
 
-TODO: refacor TEAL checks
+TODO: refactor TEAL checks
 
 ```
 // COOPERATE
@@ -440,8 +440,8 @@ bnz fee
 
 fail:
 int 0
-
 ```
+
 ### TODO: Create the Dispute Transaction Group
 
 `goal clerk send --from $ACCOUNT_EVIDENCE_CONTRACT --to $TMPL_ACCOUNT_MSIG --amount 0 --close-to $TMPL_ACCOUNT_MSIG --argb64 $ARG_BASE64_CONTRACT_ID_CONCAT_INDEX -o claim.utx -d $DATA`
@@ -463,7 +463,7 @@ Notice the "lsig" has just one argument and the TEAL code.
 
 #### Sign the claim transaction
 
-Both Alice and Bob must sign, exchange and retain this claim transaction along with the corrisponding evidence contract. Alice will sign the data file and assign the results to `arg_1` using `goal clerk tealsign`:
+Both Alice and Bob must sign, exchange and retain this claim transaction along with the corresponding evidence contract. Alice will sign the data file and assign the results to `arg_1` using `goal clerk tealsign`:
 
 `goal clerk tealsign --data-file contract_$CONTRACT_INSTANCE_HEX.dat --keyfile keys/ACCOUNT_A --lsig-txn claim.utx --set-lsig-arg-idx 1 -d $DATA`
 
@@ -476,16 +476,13 @@ Notice the "lsig" now includes all three arguments required by the evidence cont
 
 `goal clerk dryrun -t claim.utx`
 
-
 #### Sign the Contract Instance
 
 Both Alice and Bob must sign, exchange and retain the contract instance file. By signing, each asserts they created the payment channel represented by the nonce and the most recent state is found at the index value.
 
-
 ### TODO: Signing and Exchanging Data
 Alice and Bob must sign, exchange and retain two set of data: instance_id and group_id. 
 
-### TODO: Conclution
+### TODO: Complete TEAL code file.
 
-The payment channel 
-
+### TODO: Conclusion
