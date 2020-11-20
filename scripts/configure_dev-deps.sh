@@ -30,7 +30,11 @@ function install_go_module {
         exit 1
     fi
 }
-
+UNAME=$(uname)
+if [[ "${UNAME}" == *"MINGW"* ]]; then
+	export GOPATH=$HOME/go
+	export GOROOT=$MINGW_PREFIX/lib/go
+fi
 install_go_module golang.org/x/lint/golint
 install_go_module golang.org/x/tools/cmd/stringer
 install_go_module github.com/go-swagger/go-swagger/cmd/swagger v0.25.0
