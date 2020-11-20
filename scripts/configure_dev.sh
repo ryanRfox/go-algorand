@@ -102,6 +102,12 @@ elif [ "${OS}" = "windows" ]; then
     then
         exit 1
     fi
+
+    UNAME=$(uname)
+    if [[ "${UNAME}" == *"MINGW"* ]]; then
+        export GOPATH=$HOME/go
+        export GOROOT=$MINGW_PREFIX/lib/go
+    fi
 fi
 
 if ${SKIP_GO_DEPS} ; then
