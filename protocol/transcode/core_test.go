@@ -1,4 +1,4 @@
-// Copyright (C) 2019 Algorand, Inc.
+// Copyright (C) 2019-2021 Algorand, Inc.
 // This file is part of go-algorand
 //
 // go-algorand is free software: you can redistribute it and/or modify
@@ -171,7 +171,7 @@ func TestIdempotence(t *testing.T) {
 
 	for i := 0; i < niter; i++ {
 		o := randomMap(6, 3)
-		testIdempotentRoundtrip(t, protocol.Encode(o))
+		testIdempotentRoundtrip(t, protocol.EncodeReflect(o))
 	}
 }
 
@@ -185,7 +185,7 @@ func TestIdempotenceMultiobject(t *testing.T) {
 		nobj := crypto.RandUint64() % 8
 		buf := []byte{}
 		for j := 0; j < int(nobj); j++ {
-			buf = append(buf, protocol.Encode(randomMap(6, 3))...)
+			buf = append(buf, protocol.EncodeReflect(randomMap(6, 3))...)
 		}
 		testIdempotentRoundtrip(t, buf)
 	}
@@ -240,6 +240,6 @@ func TestIdempotenceStruct(t *testing.T) {
 			p.M[fmt.Sprintf("K%dK", crypto.RandUint64())] = fmt.Sprintf("V%dV", crypto.RandUint64())
 		}
 
-		testIdempotentRoundtrip(t, protocol.Encode(p))
+		testIdempotentRoundtrip(t, protocol.EncodeReflect(&p))
 	}
 }

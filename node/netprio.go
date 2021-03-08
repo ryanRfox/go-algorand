@@ -1,4 +1,4 @@
-// Copyright (C) 2019 Algorand, Inc.
+// Copyright (C) 2019-2021 Algorand, Inc.
 // This file is part of go-algorand
 //
 // go-algorand is free software: you can redistribute it and/or modify
@@ -27,10 +27,14 @@ import (
 )
 
 type netPrioResponse struct {
+	_struct struct{} `codec:",omitempty,omitemptyarray"`
+
 	Nonce string
 }
 
 type netPrioResponseSigned struct {
+	_struct struct{} `codec:",omitempty,omitemptyarray"`
+
 	Response netPrioResponse
 	Round    basics.Round
 	Sender   basics.Address
@@ -38,7 +42,7 @@ type netPrioResponseSigned struct {
 }
 
 func (npr netPrioResponse) ToBeHashed() (protocol.HashID, []byte) {
-	return protocol.NetPrioResponse, protocol.Encode(npr)
+	return protocol.NetPrioResponse, protocol.Encode(&npr)
 }
 
 // NewPrioChallenge implements the network.NetPrioScheme interface
@@ -104,7 +108,7 @@ func (node *AlgorandFullNode) MakePrioResponse(challenge string) []byte {
 	rs.Sender = maxPart.Address()
 	rs.Sig = signer.Sign(ephID, rs.Response)
 
-	return protocol.Encode(rs)
+	return protocol.Encode(&rs)
 }
 
 // VerifyPrioResponse implements the network.NetPrioScheme interface

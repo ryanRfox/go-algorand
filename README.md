@@ -1,4 +1,4 @@
-[![Build Status](https://travis-ci.com/algorand/go-algorand.svg?token=25XP72ADqbCQJ3TJVC9S&branch=master)](https://travis-ci.com/algorand/go-algorand)
+[![Build Status](https://travis-ci.com/algorand/go-algorand.svg?branch=master)](https://travis-ci.com/algorand/go-algorand)
 
 go-algorand
 ====================
@@ -14,8 +14,8 @@ about using and installing the algorand platform.
 
 ## Building from source ##
 
-Development is done using the [Go Programming Language](https://golang.org/)
-version 1.12.x, and this document assumes that you have a functioning
+Development is done using the [Go Programming Language](https://golang.org/).
+The version of go is specified in the project's [go.mod](go.mod) file. This document assumes that you have a functioning
 environment setup. If you need assistance setting up an environment please visit
 the [official Go documentation website](https://golang.org/doc/).
 
@@ -181,7 +181,7 @@ A number of packages provide utilities for the various components:
   - `util` contains a variety of utilities, including a codec, a sqlite wrapper,
     a goroutine pool, a timer interface, node metrics, and more.
 
-`test` contains end-to-end tests for the above components.
+`test` ([README](test/README.md)) contains end-to-end tests and utilities for the above components.
 
 
 ## License
@@ -189,6 +189,6 @@ A number of packages provide utilities for the various components:
 
 Please see the [COPYING_FAQ](COPYING_FAQ) for details about how to apply our license.
 
-Copyright (C) 2019, Algorand Inc
+Copyright (C) 2019-2021, Algorand Inc.
 
 [developer site url]: https://developer.algorand.org/

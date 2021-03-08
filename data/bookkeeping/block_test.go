@@ -1,4 +1,4 @@
-// Copyright (C) 2019 Algorand, Inc.
+// Copyright (C) 2019-2021 Algorand, Inc.
 // This file is part of go-algorand
 //
 // go-algorand is free software: you can redistribute it and/or modify
@@ -35,17 +35,28 @@ var proto1 = protocol.ConsensusVersion("Test1")
 var proto2 = protocol.ConsensusVersion("Test2")
 var proto3 = protocol.ConsensusVersion("Test3")
 var protoUnsupported = protocol.ConsensusVersion("TestUnsupported")
+var protoDelay = protocol.ConsensusVersion("TestDelay")
 
 func init() {
 	params1 := config.Consensus[protocol.ConsensusCurrentVersion]
-	params1.ApprovedUpgrades = map[protocol.ConsensusVersion]bool{
-		proto2: true,
+	params1.ApprovedUpgrades = map[protocol.ConsensusVersion]uint64{
+		proto2: 0,
 	}
+	params1.MinUpgradeWaitRounds = 0
+	params1.MaxUpgradeWaitRounds = 0
 	config.Consensus[proto1] = params1
 
 	params2 := config.Consensus[protocol.ConsensusCurrentVersion]
-	params2.ApprovedUpgrades = map[protocol.ConsensusVersion]bool{}
+	params2.ApprovedUpgrades = map[protocol.ConsensusVersion]uint64{}
 	config.Consensus[proto2] = params2
+
+	paramsDelay := config.Consensus[protocol.ConsensusCurrentVersion]
+	paramsDelay.MinUpgradeWaitRounds = 3
+	paramsDelay.MaxUpgradeWaitRounds = 7
+	paramsDelay.ApprovedUpgrades = map[protocol.ConsensusVersion]uint64{
+		proto1: 5,
+	}
+	config.Consensus[protoDelay] = paramsDelay
 }
 
 func TestUpgradeVote(t *testing.T) {
@@ -109,6 +120,30 @@ func TestUpgradeVote(t *testing.T) {
 	require.Equal(t, s1.NextProtocolSwitchOn, basics.Round(0))
 }
 
+func TestUpgradeVariableDelay(t *testing.T) {
+	s := UpgradeState{
+		CurrentProtocol: protoDelay,
+	}
+
+	_, err := s.applyUpgradeVote(basics.Round(10), UpgradeVote{UpgradePropose: proto1, UpgradeDelay: 2})
+	require.Error(t, err, "accepted upgrade vote with delay less than MinUpgradeWaitRounds")
+
+	_, err = s.applyUpgradeVote(basics.Round(10), UpgradeVote{UpgradePropose: proto1, UpgradeDelay: 8})
+	require.Error(t, err, "accepted upgrade vote with delay more than MaxUpgradeWaitRounds")
+
+	_, err = s.applyUpgradeVote(basics.Round(10), UpgradeVote{UpgradePropose: proto1, UpgradeDelay: 5})
+	require.NoError(t, err, "did not accept upgrade vote with in-bounds delay")
+
+	_, err = s.applyUpgradeVote(basics.Round(10), UpgradeVote{UpgradePropose: proto1, UpgradeDelay: 3})
+	require.NoError(t, err, "did not accept upgrade vote with minimal delay")
+
+	_, err = s.applyUpgradeVote(basics.Round(10), UpgradeVote{UpgradePropose: proto1, UpgradeDelay: 7})
+	require.NoError(t, err, "did not accept upgrade vote with maximal delay")
+
+	_, err = s.applyUpgradeVote(basics.Round(10), UpgradeVote{UpgradePropose: proto1, UpgradeDelay: 0})
+	require.Error(t, err, "accepted upgrade vote with zero (below minimal) delay")
+}
+
 func TestMakeBlockUpgrades(t *testing.T) {
 	var b Block
 	b.BlockHeader.GenesisID = t.Name()
@@ -133,6 +168,30 @@ func TestMakeBlockUpgrades(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, b3.UpgradePropose, protocol.ConsensusVersion(""))
 	require.Equal(t, b3.UpgradeApprove, false)
+
+	var bd Block
+	bd.BlockHeader.GenesisID = t.Name()
+	bd.CurrentProtocol = protoDelay
+	bd.BlockHeader.GenesisID = "test"
+	crypto.RandBytes(bd.BlockHeader.GenesisHash[:])
+
+	bd1 := MakeBlock(bd.BlockHeader)
+	err = bd1.PreCheck(bd.BlockHeader)
+	require.NoError(t, err)
+	require.Equal(t, bd1.UpgradePropose, proto1)
+	require.Equal(t, bd1.UpgradeApprove, true)
+	require.Equal(t, bd1.UpgradeDelay, basics.Round(5))
+	require.Equal(t, bd1.NextProtocol, proto1)
+	require.Equal(t, bd1.NextProtocolSwitchOn-bd1.NextProtocolVoteBefore, basics.Round(5))
+
+	bd2 := MakeBlock(bd1.BlockHeader)
+	err = bd2.PreCheck(bd1.BlockHeader)
+	require.NoError(t, err)
+	require.Equal(t, bd2.UpgradePropose, protocol.ConsensusVersion(""))
+	require.Equal(t, bd2.UpgradeApprove, true)
+	require.Equal(t, bd2.UpgradeDelay, basics.Round(0))
+	require.Equal(t, bd2.NextProtocol, proto1)
+	require.Equal(t, bd2.NextProtocolSwitchOn-bd2.NextProtocolVoteBefore, basics.Round(5))
 }
 
 func TestBlockUnsupported(t *testing.T) {
@@ -315,4 +374,58 @@ func TestDecodeMalformedSignedTxn(t *testing.T) {
 	txib2.SignedTxn.Txn.GenesisHash = b.BlockHeader.GenesisHash
 	_, _, err = b.DecodeSignedTxn(txib2)
 	require.Error(t, err)
+}
+
+// TestInitialRewardsRateCalculation perform positive and negative testing for the InitialRewardsRateCalculation fix by
+// running the rounds in the same way eval() is executing them over RewardsRateRefreshInterval rounds.
+func TestInitialRewardsRateCalculation(t *testing.T) {
+	consensusParams := config.Consensus[protocol.ConsensusCurrentVersion]
+
+	runTest := func() bool {
+		incentivePoolBalance := uint64(125000000000000)
+		totalRewardUnits := uint64(10000000000)
+		require.GreaterOrEqual(t, incentivePoolBalance, consensusParams.MinBalance)
+
+		curRewardsState := RewardsState{
+			RewardsLevel:              0,
+			RewardsResidue:            0,
+			RewardsRecalculationRound: basics.Round(consensusParams.RewardsRateRefreshInterval),
+		}
+		if consensusParams.InitialRewardsRateCalculation {
+			curRewardsState.RewardsRate = basics.SubSaturate(incentivePoolBalance, consensusParams.MinBalance) / uint64(consensusParams.RewardsRateRefreshInterval)
+		} else {
+			curRewardsState.RewardsRate = incentivePoolBalance / uint64(consensusParams.RewardsRateRefreshInterval)
+		}
+		for rnd := 1; rnd < int(consensusParams.RewardsRateRefreshInterval+2); rnd++ {
+			nextRewardState := curRewardsState.NextRewardsState(basics.Round(rnd), consensusParams, basics.MicroAlgos{Raw: incentivePoolBalance}, totalRewardUnits)
+			// adjust the incentive pool balance
+			var ot basics.OverflowTracker
+
+			// get number of rewards per unit
+			rewardsPerUnit := ot.Sub(nextRewardState.RewardsLevel, curRewardsState.RewardsLevel)
+			require.False(t, ot.Overflowed)
+
+			// subtract the total dispersed funds from the pool balance
+			incentivePoolBalance = ot.Sub(incentivePoolBalance, ot.Mul(totalRewardUnits, rewardsPerUnit))
+			require.False(t, ot.Overflowed)
+
+			// make sure the pool retain at least the min balance
+			ot.Sub(incentivePoolBalance, consensusParams.MinBalance)
+			if ot.Overflowed {
+				return false
+			}
+
+			// prepare for the next iteration
+			curRewardsState = nextRewardState
+		}
+		return true
+	}
+
+	// test expected failuire
+	consensusParams.InitialRewardsRateCalculation = false
+	require.False(t, runTest())
+
+	// test expected success
+	consensusParams.InitialRewardsRateCalculation = true
+	require.True(t, runTest())
 }

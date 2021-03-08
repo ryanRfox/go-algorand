@@ -1,4 +1,4 @@
-// Copyright (C) 2019 Algorand, Inc.
+// Copyright (C) 2019-2021 Algorand, Inc.
 // This file is part of go-algorand
 //
 // go-algorand is free software: you can redistribute it and/or modify
@@ -54,15 +54,14 @@ func spinNetwork(t *testing.T, nodesCount int) ([]*networkImpl, []*messageCounte
 	cfg.OutgoingMessageFilterBucketCount = 3
 	cfg.OutgoingMessageFilterBucketSize = 32
 	cfg.EnableOutgoingNetworkMessageFiltering = false
+	cfg.DNSBootstrapID = "" // prevent attempts of getting bootstrap SRV from DNS server(s)
 
 	log := logging.TestingLog(t)
 	start := time.Now()
 	nodesAddresses := []string{}
 	gossipNodes := []network.GossipNode{}
-	phonebooks := make([]*network.ThreadsafePhonebook, nodesCount)
 	for nodeIdx := 0; nodeIdx < nodesCount; nodeIdx++ {
-		phonebooks[nodeIdx] = network.MakeThreadsafePhonebook()
-		gossipNode, err := network.NewWebsocketGossipNode(log.With("node", nodeIdx), cfg, phonebooks[nodeIdx], "go-test-agreement-network-genesis", config.Devtestnet)
+		gossipNode, err := network.NewWebsocketGossipNode(log.With("node", nodeIdx), cfg, nodesAddresses, "go-test-agreement-network-genesis", config.Devtestnet)
 		if err != nil {
 			t.Fatalf("fail making ws node: %v", err)
 		}
@@ -73,19 +72,16 @@ func spinNetwork(t *testing.T, nodesCount int) ([]*networkImpl, []*messageCounte
 		gossipNodes = append(gossipNodes, gossipNode)
 	}
 
-	for nodeIdx, gossipNode := range gossipNodes {
-		others := []string{}
-		others = append(others, nodesAddresses[nodeIdx+1:]...)
-		phonebooks[nodeIdx].ReplacePeerList(others)
-		log.Debugf("phonebook[%d] %#v", nodeIdx, others)
+	for _, gossipNode := range gossipNodes {
 		gossipNode.RequestConnectOutgoing(false, nil) // no disconnect.
 	}
 
 	networkImpls := []*networkImpl{}
 	msgCounters := []*messageCounter{}
 	for _, gossipNode := range gossipNodes {
-		networkImpl := WrapNetwork(gossipNode).(*networkImpl)
+		networkImpl := WrapNetwork(gossipNode, log).(*networkImpl)
 		networkImpls = append(networkImpls, networkImpl)
+		networkImpl.Start()
 		msgCounter := startMessageCounter(networkImpl)
 		msgCounters = append(msgCounters, msgCounter)
 	}

@@ -1,4 +1,4 @@
-// Copyright (C) 2019 Algorand, Inc.
+// Copyright (C) 2019-2021 Algorand, Inc.
 // This file is part of go-algorand
 //
 // go-algorand is free software: you can redistribute it and/or modify
@@ -28,6 +28,8 @@ import (
 // A Selector is the input used to define proposers and members of voting
 // committees.
 type selector struct {
+	_struct struct{} `codec:""` // not omitempty
+
 	Seed   committee.Seed `codec:"seed"`
 	Round  basics.Round   `codec:"rnd"`
 	Period period         `codec:"per"`
@@ -36,7 +38,7 @@ type selector struct {
 
 // ToBeHashed implements the crypto.Hashable interface.
 func (sel selector) ToBeHashed() (protocol.HashID, []byte) {
-	return protocol.AgreementSelector, protocol.Encode(sel)
+	return protocol.AgreementSelector, protocol.Encode(&sel)
 }
 
 // CommitteeSize returns the size of the committee, which is determined by
@@ -53,7 +55,7 @@ func seedRound(r basics.Round, cparams config.ConsensusParams) basics.Round {
 	return r.SubSaturate(basics.Round(cparams.SeedLookback))
 }
 
-// a helper function for obtaining memberhship verification parameters.
+// a helper function for obtaining membership verification parameters.
 func membership(l LedgerReader, addr basics.Address, r basics.Round, p period, s step) (m committee.Membership, err error) {
 	cparams, err := l.ConsensusParams(ParamsRound(r))
 	if err != nil {
@@ -62,25 +64,25 @@ func membership(l LedgerReader, addr basics.Address, r basics.Round, p period, s
 	balanceRound := balanceRound(r, cparams)
 	seedRound := seedRound(r, cparams)
 
-	record, err := l.BalanceRecord(balanceRound, addr)
+	record, err := l.Lookup(balanceRound, addr)
 	if err != nil {
-		err = fmt.Errorf("Service.initializeVote (r=%v): Failed to obtain balance record for address %v in round %v: %v", r, addr, balanceRound, err)
+		err = fmt.Errorf("Service.initializeVote (r=%d): Failed to obtain balance record for address %v in round %d: %w", r, addr, balanceRound, err)
 		return
 	}
 
 	total, err := l.Circulation(balanceRound)
 	if err != nil {
-		err = fmt.Errorf("Service.initializeVote (r=%v): Failed to obtain total circulation in round %v: %v", r, balanceRound, err)
+		err = fmt.Errorf("Service.initializeVote (r=%d): Failed to obtain total circulation in round %d: %v", r, balanceRound, err)
 		return
 	}
 
 	seed, err := l.Seed(seedRound)
 	if err != nil {
-		err = fmt.Errorf("Service.initializeVote (r=%v): Failed to obtain seed in round %v: %v", r, seedRound, err)
+		err = fmt.Errorf("Service.initializeVote (r=%d): Failed to obtain seed in round %d: %v", r, seedRound, err)
 		return
 	}
 
-	m.Record = record
+	m.Record = committee.BalanceRecord{AccountData: record, Addr: addr}
 	m.Selector = selector{Seed: seed, Round: r, Period: p, Step: s}
 	m.TotalMoney = total
 	return m, nil

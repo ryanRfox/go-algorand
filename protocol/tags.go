@@ -1,4 +1,4 @@
-// Copyright (C) 2019 Algorand, Inc.
+// Copyright (C) 2019-2021 Algorand, Inc.
 // This file is part of go-algorand
 //
 // go-algorand is free software: you can redistribute it and/or modify
@@ -21,34 +21,23 @@ package protocol
 type Tag string
 
 // Tags, in lexicographic sort order of tag values to avoid duplicates.
+// These tags must not contain a comma character because lists of tags
+// are encoded using a comma separator (see network/msgOfInterest.go).
 const (
 	UnknownMsgTag      Tag = "??"
 	AgreementVoteTag   Tag = "AV"
-	MsgSkipTag         Tag = "MS"
+	CompactCertSigTag  Tag = "CS"
+	MsgOfInterestTag   Tag = "MI"
+	MsgDigestSkipTag   Tag = "MS"
 	NetPrioResponseTag Tag = "NP"
 	PingTag            Tag = "pi"
 	PingReplyTag       Tag = "pj"
 	ProposalPayloadTag Tag = "PP"
+	TopicMsgRespTag    Tag = "TS"
 	TxnTag             Tag = "TX"
-	UniCatchupReqTag   Tag = "UC"
+	UniCatchupReqTag   Tag = "UC" //Replaced by UniEnsBlockReqTag. Only for backward compatibility.
 	UniEnsBlockReqTag  Tag = "UE"
-	UniEnsBlockResTag  Tag = "US"
-	UniCatchupResTag   Tag = "UT"
-	VoteBundleTag      Tag = "VB"
+	//UniEnsBlockResTag  Tag = "US" was used for wsfetcherservice
+	//UniCatchupResTag   Tag = "UT" was used for wsfetcherservice
+	VoteBundleTag Tag = "VB"
 )
-
-// Complement is a convenience function for returning a corresponding response/request tag
-func (t Tag) Complement() Tag {
-	switch t {
-	case UniCatchupResTag:
-		return UniCatchupReqTag
-	case UniCatchupReqTag:
-		return UniCatchupResTag
-	case UniEnsBlockResTag:
-		return UniEnsBlockReqTag
-	case UniEnsBlockReqTag:
-		return UniEnsBlockResTag
-	default:
-		return UnknownMsgTag
-	}
-}

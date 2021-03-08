@@ -1,4 +1,4 @@
-// Copyright (C) 2019 Algorand, Inc.
+// Copyright (C) 2019-2021 Algorand, Inc.
 // This file is part of go-algorand
 //
 // go-algorand is free software: you can redistribute it and/or modify
@@ -235,7 +235,7 @@ func main() {
 	fmt.Printf("Collected %d auctionmaster inputs\n", len(results))
 
 	outfile := fmt.Sprintf("auction%d.inputs", cfg.AuctionID)
-	err = ioutil.WriteFile(outfile, protocol.Encode(results), 0666)
+	err = ioutil.WriteFile(outfile, protocol.EncodeReflect(results), 0666)
 	if err != nil {
 		fmt.Printf("Cannot write to %s: %v\n", outfile, err)
 		os.Exit(1)

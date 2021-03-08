@@ -1,4 +1,4 @@
-// Copyright (C) 2019 Algorand, Inc.
+// Copyright (C) 2019-2021 Algorand, Inc.
 // This file is part of go-algorand
 //
 // go-algorand is free software: you can redistribute it and/or modify
@@ -36,9 +36,18 @@ type Selector interface {
 	CommitteeSize(config.ConsensusParams) uint64
 }
 
+// BalanceRecord pairs an account's address with its associated data.
+//
+// This struct is used to decouple LedgerReader.AccountData from basics.BalanceRecord.
+//msgp:ignore BalanceRecord
+type BalanceRecord struct {
+	basics.AccountData
+	Addr basics.Address
+}
+
 // Membership encodes the parameters used to verify membership in a committee.
 type Membership struct {
-	Record     basics.BalanceRecord
+	Record     BalanceRecord
 	Selector   Selector
 	TotalMoney basics.MicroAlgos
 }

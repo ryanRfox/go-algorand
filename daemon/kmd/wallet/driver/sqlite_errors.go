@@ -1,4 +1,4 @@
-// Copyright (C) 2019 Algorand, Inc.
+// Copyright (C) 2019-2021 Algorand, Inc.
 // This file is part of go-algorand
 //
 // go-algorand is free software: you can redistribute it and/or modify
@@ -23,6 +23,7 @@ import (
 var errDatabase = fmt.Errorf("database error")
 var errDatabaseConnect = fmt.Errorf("error connecting to database")
 var errKeyNotFound = fmt.Errorf("key does not exist in this wallet")
+var errMsigDataNotFound = fmt.Errorf("multisig information (pks, threshold) for address does not exist in this wallet")
 var errSKToPK = fmt.Errorf("could not convert secret key to public key")
 var errSKToSeed = fmt.Errorf("could not convert secret key to seed")
 var errTampering = fmt.Errorf("derived public key mismatch, something fishy is going on with this wallet")
@@ -42,5 +43,5 @@ var errWalletNotFound = fmt.Errorf("wallet not found")
 var errSQLiteWrongType = fmt.Errorf("sqlite wallet driver returned wrong wallet type")
 var errNameTooLong = fmt.Errorf("wallet name too long, must be <= %d bytes", sqliteMaxWalletNameLen)
 var errIDTooLong = fmt.Errorf("wallet id too long, must be <= %d bytes", sqliteMaxWalletIDLen)
-var errMsigWrongAddr = fmt.Errorf("given multisig preimage hashes to wrong address")
+var errMsigWrongAddr = fmt.Errorf("given multisig preimage hashes to neither Sender nor AuthAddr")
 var errMsigWrongKey = fmt.Errorf("given key is not a possible signer for this multisig")

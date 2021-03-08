@@ -1,4 +1,4 @@
-// Copyright (C) 2019 Algorand, Inc.
+// Copyright (C) 2019-2021 Algorand, Inc.
 // This file is part of go-algorand
 //
 // go-algorand is free software: you can redistribute it and/or modify
@@ -17,6 +17,7 @@
 package account
 
 import (
+	"context"
 	"database/sql"
 	"testing"
 
@@ -52,7 +53,7 @@ func TestParticipation_NewDB(t *testing.T) {
 }
 
 func getSchemaVersions(db db.Accessor) (versions map[string]int, err error) {
-	err = db.Atomic(func(tx *sql.Tx) (err error) {
+	err = db.Atomic(func(ctx context.Context, tx *sql.Tx) (err error) {
 		rows, err := tx.Query("SELECT tablename, version FROM schema")
 		if err != nil {
 			return

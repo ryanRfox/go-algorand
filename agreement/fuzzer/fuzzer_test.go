@@ -1,4 +1,4 @@
-// Copyright (C) 2019 Algorand, Inc.
+// Copyright (C) 2019-2021 Algorand, Inc.
 // This file is part of go-algorand
 //
 // go-algorand is free software: you can redistribute it and/or modify
@@ -52,7 +52,7 @@ type Fuzzer struct {
 	router           *Router
 	log              logging.Logger
 	accounts         []account.Participation
-	balances         map[basics.Address]basics.BalanceRecord
+	balances         map[basics.Address]basics.AccountData
 	accountAccessors []db.Accessor
 	ledgers          []*testLedger
 	tickGranularity  time.Duration
@@ -83,7 +83,7 @@ func MakeFuzzer(config FuzzerConfig) *Fuzzer {
 		disconnected:     make([][]bool, config.NodesCount),
 		crashAccessors:   make([]db.Accessor, config.NodesCount),
 		accounts:         make([]account.Participation, config.NodesCount),
-		balances:         make(map[basics.Address]basics.BalanceRecord),
+		balances:         make(map[basics.Address]basics.AccountData),
 		accountAccessors: make([]db.Accessor, config.NodesCount*2),
 		ledgers:          make([]*testLedger, config.NodesCount),
 		agreementParams:  make([]agreement.Parameters, config.NodesCount),
@@ -127,10 +127,11 @@ func (n *Fuzzer) initAgreementNode(nodeID int, filters ...NetworkFilterFactory) 
 		return false
 	}
 
+	logger := n.log.WithFields(logging.Fields{"Source": "service-" + strconv.Itoa(nodeID)})
 	n.agreementParams[nodeID] = agreement.Parameters{
-		Logger:                  n.log.WithFields(logging.Fields{"Source": "service-" + strconv.Itoa(nodeID)}),
+		Logger:                  logger,
 		Ledger:                  n.ledgers[nodeID],
-		Network:                 gossip.WrapNetwork(n.facades[nodeID]),
+		Network:                 gossip.WrapNetwork(n.facades[nodeID], logger),
 		KeyManager:              simpleKeyManager(n.accounts[nodeID : nodeID+1]),
 		BlockValidator:          n.blockValidator,
 		BlockFactory:            testBlockFactory{Owner: nodeID},
@@ -238,10 +239,7 @@ func (n *Fuzzer) initAccountsAndBalances(rootSeed []byte, onlineNodes []bool) er
 				acctData.Status = basics.Offline
 			}
 		}
-		n.balances[rootAddress] = basics.BalanceRecord{
-			Addr:        rootAddress,
-			AccountData: acctData,
-		}
+		n.balances[rootAddress] = acctData
 	}
 	return nil
 }
@@ -593,7 +591,7 @@ func (n *Fuzzer) CrashNode(nodeID int) {
 	n.facades[nodeID].ClearHandlers()
 	n.ledgers[nodeID].ClearNotifications()
 
-	n.agreementParams[nodeID].Network = gossip.WrapNetwork(n.facades[nodeID])
+	n.agreementParams[nodeID].Network = gossip.WrapNetwork(n.facades[nodeID], n.log)
 	n.agreements[nodeID] = agreement.MakeService(n.agreementParams[nodeID])
 
 	cadaverFilename := fmt.Sprintf("%v-%v", n.networkName, nodeID)

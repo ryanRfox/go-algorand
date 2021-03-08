@@ -1,4 +1,4 @@
-// Copyright (C) 2019 Algorand, Inc.
+// Copyright (C) 2019-2021 Algorand, Inc.
 // This file is part of go-algorand
 //
 // go-algorand is free software: you can redistribute it and/or modify
@@ -19,16 +19,20 @@ package restapi
 import (
 	"context"
 	"errors"
+	"flag"
 	"math"
 	"math/rand"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 	"unicode"
-	"runtime"
 
 	"github.com/stretchr/testify/require"
+
+	algodclient "github.com/algorand/go-algorand/daemon/algod/api/client"
+	kmdclient "github.com/algorand/go-algorand/daemon/kmd/client"
 
 	"github.com/algorand/go-algorand/config"
 	"github.com/algorand/go-algorand/crypto"
@@ -43,8 +47,19 @@ import (
 var fixture fixtures.RestClientFixture
 
 func TestMain(m *testing.M) {
-	fixture.SetupShared("RestClientTests", filepath.Join("nettemplates", "TwoNodes50Each.json"))
-	fixture.RunAndExit(m)
+	listMode := false
+	flag.Parse()
+	flag.Visit(func(f *flag.Flag) {
+		if f.Name == "test.list" {
+			listMode = true
+		}
+	})
+	if !listMode {
+		fixture.SetupShared("RestClientTests", filepath.Join("nettemplates", "TwoNodes50Each.json"))
+		fixture.RunAndExit(m)
+	} else {
+		os.Exit(m.Run())
+	}
 }
 
 // helper generates a random Uppercase Alphabetic ASCII char
@@ -172,6 +187,11 @@ func TestClientCanGetStatus(t *testing.T) {
 	statusResponse, err := testClient.Status()
 	require.NoError(t, err)
 	require.NotEmpty(t, statusResponse)
+	testClient.SetAPIVersionAffinity(algodclient.APIVersionV2, kmdclient.APIVersionV1)
+	statusResponse2, err := testClient.Status()
+	require.NoError(t, err)
+	require.NotEmpty(t, statusResponse2)
+	require.True(t, statusResponse2.LastRound >= statusResponse.LastRound)
 }
 
 func TestClientCanGetStatusAfterBlock(t *testing.T) {
@@ -180,12 +200,13 @@ func TestClientCanGetStatusAfterBlock(t *testing.T) {
 	statusResponse, err := testClient.WaitForRound(1)
 	require.NoError(t, err)
 	require.NotEmpty(t, statusResponse)
+	testClient.SetAPIVersionAffinity(algodclient.APIVersionV2, kmdclient.APIVersionV1)
+	statusResponse, err = testClient.WaitForRound(statusResponse.LastRound + 1)
+	require.NoError(t, err)
+	require.NotEmpty(t, statusResponse)
 }
 
 func TestTransactionsByAddr(t *testing.T) {
-	if runtime.GOOS == "darwin" {
-		t.Skip()
-	}
 	var localFixture fixtures.RestClientFixture
 	localFixture.Setup(t, filepath.Join("nettemplates", "TwoNodes50Each.json"))
 	defer localFixture.Shutdown()

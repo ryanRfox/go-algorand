@@ -1,4 +1,4 @@
-// Copyright (C) 2019 Algorand, Inc.
+// Copyright (C) 2019-2021 Algorand, Inc.
 // This file is part of go-algorand
 //
 // go-algorand is free software: you can redistribute it and/or modify
@@ -23,16 +23,17 @@ import (
 
 	"github.com/algorand/go-algorand/data/basics"
 	"github.com/algorand/go-algorand/data/bookkeeping"
+	"github.com/algorand/go-algorand/ledger/ledgercore"
 )
 
 // BlockListener represents an object that needs to get notified on new blocks.
 type BlockListener interface {
-	OnNewBlock(block bookkeeping.Block, delta StateDelta)
+	OnNewBlock(block bookkeeping.Block, delta ledgercore.StateDelta)
 }
 
 type blockDeltaPair struct {
 	block bookkeeping.Block
-	delta StateDelta
+	delta ledgercore.StateDelta
 }
 
 type blockNotifier struct {
@@ -41,9 +42,12 @@ type blockNotifier struct {
 	listeners     []BlockListener
 	pendingBlocks []blockDeltaPair
 	running       bool
+	// closing is the waitgroup used to synchronize closing the worker goroutine. It's being increased during loadFromDisk, and the worker is responsible to call Done on it once it's aborting it's goroutine. The close function waits on this to complete.
+	closing sync.WaitGroup
 }
 
 func (bn *blockNotifier) worker() {
+	defer bn.closing.Done()
 	bn.mu.Lock()
 
 	for {
@@ -73,17 +77,19 @@ func (bn *blockNotifier) worker() {
 
 func (bn *blockNotifier) close() {
 	bn.mu.Lock()
-	defer bn.mu.Unlock()
 	if bn.running {
 		bn.running = false
 		bn.cond.Broadcast()
 	}
+	bn.mu.Unlock()
+	bn.closing.Wait()
 }
 
 func (bn *blockNotifier) loadFromDisk(l ledgerForTracker) error {
 	bn.cond = sync.NewCond(&bn.mu)
 	bn.running = true
-
+	bn.pendingBlocks = nil
+	bn.closing.Add(1)
 	go bn.worker()
 	return nil
 }
@@ -95,10 +101,9 @@ func (bn *blockNotifier) register(listeners []BlockListener) {
 	bn.listeners = append(bn.listeners, listeners...)
 }
 
-func (bn *blockNotifier) newBlock(blk bookkeeping.Block, delta StateDelta) {
+func (bn *blockNotifier) newBlock(blk bookkeeping.Block, delta ledgercore.StateDelta) {
 	bn.mu.Lock()
 	defer bn.mu.Unlock()
-
 	bn.pendingBlocks = append(bn.pendingBlocks, blockDeltaPair{block: blk, delta: delta})
 	bn.cond.Broadcast()
 }

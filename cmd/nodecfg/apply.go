@@ -1,4 +1,4 @@
-// Copyright (C) 2019 Algorand, Inc.
+// Copyright (C) 2019-2021 Algorand, Inc.
 // This file is part of go-algorand
 //
 // go-algorand is free software: you can redistribute it and/or modify
@@ -54,8 +54,8 @@ func init() {
 
 var applyCmd = &cobra.Command{
 	Use:   "apply",
-	Short: "apply a node configuration to a new host",
-	Long:  `apply a node configuration to a new host providing feedback on progress`,
+	Short: "Apply a node configuration to a new host",
+	Long:  `Apply a node configuration to a new host providing feedback on progress`,
 	Run: func(cmd *cobra.Command, args []string) {
 		if err := validateArgs(); err != nil {
 			reportErrorf("Error validating arguments: %v", err)

@@ -1,4 +1,4 @@
-// Copyright (C) 2019 Algorand, Inc.
+// Copyright (C) 2019-2021 Algorand, Inc.
 // This file is part of go-algorand
 //
 // go-algorand is free software: you can redistribute it and/or modify
@@ -17,8 +17,16 @@
 package crypto
 
 // #cgo CFLAGS: -Wall -std=c99
-// #cgo CFLAGS: -I${SRCDIR}/include/
-// #cgo LDFLAGS: ${SRCDIR}/lib/libsodium.a
+// #cgo darwin,amd64 CFLAGS: -I${SRCDIR}/libs/darwin/amd64/include
+// #cgo darwin,amd64 LDFLAGS: ${SRCDIR}/libs/darwin/amd64/lib/libsodium.a
+// #cgo linux,amd64 CFLAGS: -I${SRCDIR}/libs/linux/amd64/include
+// #cgo linux,amd64 LDFLAGS: ${SRCDIR}/libs/linux/amd64/lib/libsodium.a
+// #cgo linux,arm64 CFLAGS: -I${SRCDIR}/libs/linux/arm64/include
+// #cgo linux,arm64 LDFLAGS: ${SRCDIR}/libs/linux/arm64/lib/libsodium.a
+// #cgo linux,arm CFLAGS: -I${SRCDIR}/libs/linux/arm/include
+// #cgo linux,arm LDFLAGS: ${SRCDIR}/libs/linux/arm/lib/libsodium.a
+// #cgo windows,amd64 CFLAGS: -I${SRCDIR}/libs/windows/amd64/include
+// #cgo windows,amd64 LDFLAGS: ${SRCDIR}/libs/windows/amd64/lib/libsodium.a
 // #include <stdint.h>
 // #include "sodium.h"
 import "C"
@@ -39,6 +47,8 @@ type VRFProof = VrfProof
 
 // VRFSecrets is a wrapper for a VRF keypair. Use *VrfPrivkey instead
 type VRFSecrets struct {
+	_struct struct{} `codec:""`
+
 	PK VrfPubkey
 	SK VrfPrivkey
 }
@@ -56,15 +66,15 @@ func GenerateVRFSecrets() *VRFSecrets {
 type (
 	// A VrfPrivkey is a private key used for producing VRF proofs.
 	// Specifically, we use a 64-byte ed25519 private key (the latter 32-bytes are the precomputed public key)
-	VrfPrivkey [64]uint8
+	VrfPrivkey [64]byte
 	// A VrfPubkey is a public key that can be used to verify VRF proofs.
-	VrfPubkey [32]uint8
+	VrfPubkey [32]byte
 	// A VrfProof for a message can be generated with a secret key and verified against a public key, like a signature.
 	// Proofs are malleable, however, for a given message and public key, the VRF output that can be computed from a proof is unique.
-	VrfProof [80]uint8
+	VrfProof [80]byte
 	// VrfOutput is a 64-byte pseudorandom value that can be computed from a VrfProof.
 	// The VRF scheme guarantees that such output will be unique
-	VrfOutput [64]uint8
+	VrfOutput [64]byte
 )
 
 // VrfKeygenFromSeed deterministically generates a VRF keypair from 32 bytes of (secret) entropy.

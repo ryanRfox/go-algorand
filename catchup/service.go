@@ -1,4 +1,4 @@
-// Copyright (C) 2019 Algorand, Inc.
+// Copyright (C) 2019-2021 Algorand, Inc.
 // This file is part of go-algorand
 //
 // go-algorand is free software: you can redistribute it and/or modify
@@ -18,6 +18,7 @@ package catchup
 
 import (
 	"context"
+	"fmt"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -27,30 +28,34 @@ import (
 	"github.com/algorand/go-algorand/crypto"
 	"github.com/algorand/go-algorand/data/basics"
 	"github.com/algorand/go-algorand/data/bookkeeping"
-	"github.com/algorand/go-algorand/ledger"
+	"github.com/algorand/go-algorand/ledger/ledgercore"
 	"github.com/algorand/go-algorand/logging"
 	"github.com/algorand/go-algorand/logging/telemetryspec"
 	"github.com/algorand/go-algorand/network"
 	"github.com/algorand/go-algorand/protocol"
-	"github.com/algorand/go-algorand/rpcs"
 )
 
 const catchupPeersForSync = 10
+const blockQueryPeerLimit = 10
+
 // this should be at least the number of relays
 const catchupRetryLimit = 500
+
+// PendingUnmatchedCertificate is a single certificate that is being waited upon to have its corresponding block fetched.
+type PendingUnmatchedCertificate struct {
+	Cert         agreement.Certificate
+	VoteVerifier *agreement.AsyncVoteVerifier
+}
 
 // Ledger represents the interface of a block database which the
 // catchup server should interact with.
 type Ledger interface {
-	NextRound() basics.Round
-	LastRound() basics.Round
-	Wait(basics.Round) chan struct{}
+	agreement.LedgerReader
 	AddBlock(bookkeeping.Block, agreement.Certificate) error
-	ConsensusParams(basics.Round) (config.ConsensusParams, error)
-
-	// only needed to support tests
+	EnsureBlock(block *bookkeeping.Block, c agreement.Certificate)
+	LastRound() basics.Round
 	Block(basics.Round) (bookkeeping.Block, error)
-	BlockCert(basics.Round) (bookkeeping.Block, agreement.Certificate, error)
+	IsWritingCatchpointFile() bool
 }
 
 // Service represents the catchup service. Once started and until it is stopped, it ensures that the ledger is up to date with network.
@@ -58,7 +63,7 @@ type Service struct {
 	syncStartNS     int64 // at top of struct to keep 64 bit aligned for atomic.* ops
 	cfg             config.Local
 	ledger          Ledger
-	fetcherFactory  rpcs.FetcherFactory
+	fetcherFactory  FetcherFactory
 	ctx             context.Context
 	cancel          func()
 	done            chan struct{}
@@ -68,11 +73,20 @@ type Service struct {
 	parallelBlocks  uint64
 	deadlineTimeout time.Duration
 
+	// suspendForCatchpointWriting defines whether we've ran into a state where the ledger is currently busy writing the
+	// catchpoint file. If so, we want to suspend the catchup process until the catchpoint file writing is complete,
+	// and resume from there without stopping the catchup timer.
+	suspendForCatchpointWriting bool
+
 	// The channel gets closed when the initial sync is complete. This allows for other services to avoid
 	// the overhead of starting prematurely (before this node is caught-up and can validate messages for example).
-	InitialSyncDone     chan struct{}
-	initialSyncNotified uint32
-	protocolErrorLogged bool
+	InitialSyncDone              chan struct{}
+	initialSyncNotified          uint32
+	protocolErrorLogged          bool
+	lastSupportedRound           basics.Round
+	unmatchedPendingCertificates <-chan PendingUnmatchedCertificate
+
+	latestRoundFetcherFactory FetcherFactory
 }
 
 // A BlockAuthenticator authenticates blocks given a certificate.
@@ -88,18 +102,17 @@ type BlockAuthenticator interface {
 }
 
 // MakeService creates a catchup service instance from its constituent components
-// If wsf is nil, then fetch over gossip is disabled.
-func MakeService(log logging.Logger, config config.Local, net network.GossipNode, ledger Ledger, wsf *rpcs.WsFetcherService, auth BlockAuthenticator) (s *Service) {
+func MakeService(log logging.Logger, config config.Local, net network.GossipNode, ledger Ledger, auth BlockAuthenticator, unmatchedPendingCertificates <-chan PendingUnmatchedCertificate) (s *Service) {
 	s = &Service{}
-	s.ctx, s.cancel = context.WithCancel(context.Background())
+
 	s.cfg = config
-	s.fetcherFactory = rpcs.MakeNetworkFetcherFactory(net, catchupPeersForSync, wsf)
+	s.fetcherFactory = MakeNetworkFetcherFactory(net, catchupPeersForSync, &config)
 	s.ledger = ledger
 	s.net = net
 	s.auth = auth
-
+	s.unmatchedPendingCertificates = unmatchedPendingCertificates
+	s.latestRoundFetcherFactory = MakeNetworkFetcherFactory(net, blockQueryPeerLimit, &config)
 	s.log = log.With("Context", "sync")
-	s.InitialSyncDone = make(chan struct{})
 	s.parallelBlocks = config.CatchupParallelBlocks
 	s.deadlineTimeout = agreement.DeadlineTimeout()
 	return s
@@ -108,6 +121,8 @@ func MakeService(log logging.Logger, config config.Local, net network.GossipNode
 // Start the catchup service
 func (s *Service) Start() {
 	s.done = make(chan struct{})
+	s.ctx, s.cancel = context.WithCancel(context.Background())
+	s.InitialSyncDone = make(chan struct{})
 	go s.periodicSync()
 }
 
@@ -118,7 +133,6 @@ func (s *Service) Stop() {
 	if atomic.CompareAndSwapUint32(&s.initialSyncNotified, 0, 1) {
 		close(s.InitialSyncDone)
 	}
-	s.auth.Quit()
 }
 
 // IsSynchronizing returns true if we're currently executing a sync() call - either initial catchup
@@ -141,8 +155,8 @@ func (s *Service) SynchronizingTime() time.Duration {
 }
 
 // function scope to make a bunch of defer statements better
-func (s *Service) innerFetch(fetcher rpcs.Fetcher, r basics.Round) (blk *bookkeeping.Block, cert *agreement.Certificate, rpcc rpcs.FetcherClient, err error) {
-	ctx, cf := context.WithTimeout(s.ctx, rpcs.DefaultFetchTimeout)
+func (s *Service) innerFetch(fetcher Fetcher, r basics.Round) (blk *bookkeeping.Block, cert *agreement.Certificate, rpcc FetcherClient, err error) {
+	ctx, cf := context.WithCancel(s.ctx)
 	defer cf()
 	stopWaitingForLedgerRound := make(chan struct{})
 	defer close(stopWaitingForLedgerRound)
@@ -158,7 +172,7 @@ func (s *Service) innerFetch(fetcher rpcs.Fetcher, r basics.Round) (blk *bookkee
 
 // fetchAndWrite fetches a block, checks the cert, and writes it to the ledger. Cert checking and ledger writing both wait for the ledger to advance if necessary.
 // Returns false if we couldn't fetch or write (i.e., if we failed even after a given number of retries or if we were told to abort.)
-func (s *Service) fetchAndWrite(fetcher rpcs.Fetcher, r basics.Round, prevFetchCompleteChan chan bool, lookbackComplete chan bool) bool {
+func (s *Service) fetchAndWrite(fetcher Fetcher, r basics.Round, prevFetchCompleteChan chan bool, lookbackComplete chan bool) bool {
 	i := 0
 	hasLookback := false
 	for !fetcher.OutOfPeers(r) {
@@ -172,7 +186,7 @@ func (s *Service) fetchAndWrite(fetcher rpcs.Fetcher, r basics.Round, prevFetchC
 
 		// Stop retrying after a while.
 		if i > catchupRetryLimit {
-			s.log.Errorf("fetchAndWrite(%v): failed to fetch block many times", )
+			s.log.Errorf("fetchAndWrite: block retrieval exceeded retry limit")
 			return false
 		}
 
@@ -188,11 +202,11 @@ func (s *Service) fetchAndWrite(fetcher rpcs.Fetcher, r basics.Round, prevFetchC
 			if !hasLookback {
 				select {
 				case <-s.ctx.Done():
-					s.log.Debugf("fetchAndWrite(%v): Aborted while waiting for lookback block to ledger after failing once", r)
+					s.log.Infof("fetchAndWrite(%d): Aborted while waiting for lookback block to ledger after failing once : %v", r, err)
 					return false
 				case hasLookback = <-lookbackComplete:
 					if !hasLookback {
-						s.log.Debugf("fetchAndWrite(%v): lookback block doesn't exist, won't try to retrieve block again", r)
+						s.log.Infof("fetchAndWrite(%d): lookback block doesn't exist, won't try to retrieve block again : %v", r, err)
 						return false
 					}
 				}
@@ -246,11 +260,26 @@ func (s *Service) fetchAndWrite(fetcher rpcs.Fetcher, r basics.Round, prevFetchC
 			return false
 		case prevFetchSuccess := <-prevFetchCompleteChan:
 			if prevFetchSuccess {
-				err := s.ledger.AddBlock(*block, *cert)
+				// make sure the ledger wrote enough of the account data to disk, since we don't want the ledger to hold a large amount of data in memory.
+				proto, err := s.ledger.ConsensusParams(r.SubSaturate(1))
+				if err != nil {
+					s.log.Errorf("fetchAndWrite(%d): Unable to determine consensus params for round %d: %v", r, r-1, err)
+					return false
+				}
+				ledgerBacklogRound := r.SubSaturate(basics.Round(proto.MaxBalLookback))
+				select {
+				case <-s.ledger.Wait(ledgerBacklogRound):
+					// i.e. round r-320 is no longer in the blockqueue, so it's account data is either being currently written, or it was already written.
+				case <-s.ctx.Done():
+					s.log.Debugf("fetchAndWrite(%d): Aborted while waiting for ledger to complete writing up to round %d", r, ledgerBacklogRound)
+					return false
+				}
+
+				err = s.ledger.AddBlock(*block, *cert)
 				if err != nil {
 					switch err.(type) {
-					case ledger.BlockInLedgerError:
-						s.log.Debugf("fetchAndWrite(%v): block already in ledger", r)
+					case ledgercore.BlockInLedgerError:
+						s.log.Infof("fetchAndWrite(%d): block already in ledger", r)
 						return true
 					case protocol.Error:
 						if !s.protocolErrorLogged {
@@ -275,7 +304,7 @@ func (s *Service) fetchAndWrite(fetcher rpcs.Fetcher, r basics.Round, prevFetchC
 
 type task func() basics.Round
 
-func (s *Service) pipelineCallback(fetcher rpcs.Fetcher, r basics.Round, thisFetchComplete chan bool, prevFetchCompleteChan chan bool, lookbackChan chan bool) func() basics.Round {
+func (s *Service) pipelineCallback(fetcher Fetcher, r basics.Round, thisFetchComplete chan bool, prevFetchCompleteChan chan bool, lookbackChan chan bool) func() basics.Round {
 	return func() basics.Round {
 		fetchResult := s.fetchAndWrite(fetcher, r, prevFetchCompleteChan, lookbackChan)
 
@@ -293,7 +322,7 @@ func (s *Service) pipelineCallback(fetcher rpcs.Fetcher, r basics.Round, thisFet
 
 // TODO the following code does not handle the following case: seedLookback upgrades during fetch
 func (s *Service) pipelinedFetch(seedLookback uint64) {
-	fetcher := s.fetcherFactory.NewOverGossip(protocol.UniCatchupReqTag)
+	fetcher := s.fetcherFactory.NewOverGossip()
 	defer fetcher.Close()
 
 	// make sure that we have at least one peer
@@ -339,6 +368,27 @@ func (s *Service) pipelinedFetch(seedLookback uint64) {
 	from := s.ledger.NextRound()
 	nextRound := from
 	for ; nextRound < from+basics.Round(parallelRequests); nextRound++ {
+		// If the next round is not supported
+		if s.nextRoundIsNotSupported(nextRound) {
+			// We may get here when (1) The service starts
+			// and gets to an unsupported round.  Since in
+			// this loop we do not wait for the requests
+			// to be written to the ledger, there is no
+			// guarantee that the unsupported round will be
+			// stopped in this case.
+
+			// (2) The unsupported round is detected in the
+			// "the rest" loop, but did not cancel because
+			// the last supported round was not yet written
+			// to the ledger.
+
+			// It is sufficient to check only in the first
+			// iteration, however checking in all in favor
+			// of code simplicity.
+			s.handleUnsupportedRound(nextRound)
+			break
+		}
+
 		currentRoundComplete := make(chan bool, 2)
 		// len(taskCh) + (# pending writes to completed) increases by 1
 		taskCh <- s.pipelineCallback(fetcher, nextRound, currentRoundComplete, recentReqs[len(recentReqs)-1], recentReqs[len(recentReqs)-int(seedLookback)])
@@ -354,10 +404,23 @@ func (s *Service) pipelinedFetch(seedLookback uint64) {
 				// there was an error
 				return
 			}
+			// if we're writing a catchpoint file, stop catching up to reduce the memory pressure. Once we finish writing the file we
+			// could resume with the catchup.
+			if s.ledger.IsWritingCatchpointFile() {
+				s.log.Info("Catchup is stopping due to catchpoint file being written")
+				s.suspendForCatchpointWriting = true
+				return
+			}
 			completedRounds[round] = true
 			// fetch rounds we can validate
 			for completedRounds[nextRound-basics.Round(parallelRequests)] {
+				// If the next round is not supported
+				if s.nextRoundIsNotSupported(nextRound) {
+					s.handleUnsupportedRound(nextRound)
+					return
+				}
 				delete(completedRounds, nextRound)
+
 				currentRoundComplete := make(chan bool, 2)
 				// len(taskCh) + (# pending writes to completed) increases by 1
 				taskCh <- s.pipelineCallback(fetcher, nextRound, currentRoundComplete, recentReqs[len(recentReqs)-1], recentReqs[0])
@@ -373,7 +436,6 @@ func (s *Service) pipelinedFetch(seedLookback uint64) {
 // periodicSync periodically asks the network for its latest round and syncs if we've fallen behind (also if our ledger stops advancing)
 func (s *Service) periodicSync() {
 	defer close(s.done)
-
 	// wait until network is ready, or until we're told to quit
 	select {
 	case <-s.net.Ready():
@@ -381,7 +443,10 @@ func (s *Service) periodicSync() {
 	case <-s.ctx.Done():
 		return
 	}
-	s.sync()
+	// if the catchup is disabled in the config file, just skip it.
+	if s.parallelBlocks != 0 {
+		s.sync()
+	}
 	stuckInARow := 0
 	sleepDuration := s.deadlineTimeout
 	for {
@@ -401,8 +466,21 @@ func (s *Service) periodicSync() {
 				sleepDuration = s.deadlineTimeout
 				continue
 			}
+			// if the catchup is disabled in the config file, just skip it.
+			if s.parallelBlocks == 0 {
+				continue
+			}
+			// check to see if we're currently writing a catchpoint file. If so, wait longer before attempting again.
+			if s.ledger.IsWritingCatchpointFile() {
+				// keep the existing sleep duration and try again later.
+				continue
+			}
+			s.suspendForCatchpointWriting = false
 			s.log.Info("It's been too long since our ledger advanced; resyncing")
 			s.sync()
+		case cert := <-s.unmatchedPendingCertificates:
+			// the agreement service has a valid certificate for a block, but not the block itself.
+			s.syncCert(&cert)
 		}
 
 		if currBlock == s.ledger.LastRound() {
@@ -419,17 +497,16 @@ func (s *Service) periodicSync() {
 }
 
 // Syncs the client with the network. sync asks the network for last known block and tries to sync the system
-// up the to the highest number it gets
+// up the to the highest number it gets.
 func (s *Service) sync() {
 	// Only run sync once at a time
 	// Store start time of sync - in NS so we can compute time.Duration (which is based on NS)
 	start := time.Now()
+
 	timeInNS := start.UnixNano()
 	if !atomic.CompareAndSwapInt64(&s.syncStartNS, 0, timeInNS) {
-		s.log.Infof("previous sync from %d still running (now=%d)", atomic.LoadInt64(&s.syncStartNS), timeInNS)
-		return
+		s.log.Infof("resuming previous sync from %d (now=%d)", atomic.LoadInt64(&s.syncStartNS), timeInNS)
 	}
-	defer atomic.StoreInt64(&s.syncStartNS, 0)
 
 	pr := s.ledger.LastRound()
 
@@ -440,7 +517,7 @@ func (s *Service) sync() {
 	seedLookback := uint64(2)
 	proto, err := s.ledger.ConsensusParams(pr)
 	if err != nil {
-		s.log.Errorf("catchup: could not get consensus parameters for round %v: $%v", pr, err)
+		s.log.Errorf("catchup: could not get consensus parameters for round %v: %v", pr, err)
 	} else {
 		seedLookback = proto.SeedLookback
 	}
@@ -448,10 +525,16 @@ func (s *Service) sync() {
 
 	initSync := false
 
-	// close the initial sync channel if not already close
-	if atomic.CompareAndSwapUint32(&s.initialSyncNotified, 0, 1) {
-		close(s.InitialSyncDone)
-		initSync = true
+	// if the catchupWriting flag is set, it means that we aborted the sync due to the ledger writing the catchup file.
+	if !s.suspendForCatchpointWriting {
+		// in that case, don't change the timer so that the "timer" would keep running.
+		atomic.StoreInt64(&s.syncStartNS, 0)
+
+		// close the initial sync channel if not already close
+		if atomic.CompareAndSwapUint32(&s.initialSyncNotified, 0, 1) {
+			close(s.InitialSyncDone)
+			initSync = true
+		}
 	}
 
 	elapsedTime := time.Now().Sub(start)
@@ -461,6 +544,118 @@ func (s *Service) sync() {
 		Time:       elapsedTime,
 		InitSync:   initSync,
 	})
-
 	s.log.Infof("Catchup Service: finished catching up, now at round %v (previously %v). Total time catching up %v.", s.ledger.LastRound(), pr, elapsedTime)
+}
+
+// syncCert retrieving a single round identified by the provided certificate and adds it to the ledger.
+// The sync function attempts to keep trying to fetch the matching block or abort when the catchup service exits.
+func (s *Service) syncCert(cert *PendingUnmatchedCertificate) {
+	// we want to fetch a single round. no need to be concerned about lookback.
+	s.fetchRound(cert.Cert, cert.VoteVerifier)
+}
+
+// TODO this doesn't actually use the digest from cert!
+func (s *Service) fetchRound(cert agreement.Certificate, verifier *agreement.AsyncVoteVerifier) {
+	blockHash := bookkeeping.BlockHash(cert.Proposal.BlockDigest) // semantic digest (i.e., hash of the block header), not byte-for-byte digest
+	fetcher := s.latestRoundFetcherFactory.NewOverGossip()
+	defer func() {
+		fetcher.Close()
+	}()
+	for s.ledger.LastRound() < cert.Round {
+		if fetcher.OutOfPeers(cert.Round) {
+			fetcher.Close()
+			// refresh peers and try again
+			logging.Base().Warn("fetchRound found no outgoing peers")
+			s.net.RequestConnectOutgoing(true, s.ctx.Done())
+			fetcher = s.latestRoundFetcherFactory.NewOverGossip()
+		}
+		// Ask the fetcher to get the block somehow
+		block, fetchedCert, rpcc, err := s.innerFetch(fetcher, cert.Round)
+
+		if err != nil {
+			select {
+			case <-s.ctx.Done():
+				logging.Base().Debugf("fetchRound was asked to quit before we could acquire the block")
+				return
+			default:
+			}
+			logging.Base().Warnf("fetchRound could not acquire block, fetcher errored out: %v", err)
+			continue
+		}
+		rpcc.Close()
+
+		if block.Hash() == blockHash && block.ContentsMatchHeader() {
+			s.ledger.EnsureBlock(block, cert)
+			return
+		}
+		// Otherwise, fetcher gave us the wrong block
+		logging.Base().Warnf("fetcher gave us bad/wrong block (for round %d): fetched hash %v; want hash %v", cert.Round, block.Hash(), blockHash)
+
+		// As a failsafe, if the cert we fetched is valid but for the wrong block, panic as loudly as possible
+		if cert.Round == fetchedCert.Round &&
+			cert.Proposal.BlockDigest != fetchedCert.Proposal.BlockDigest &&
+			fetchedCert.Authenticate(*block, s.ledger, verifier) == nil {
+			s := "!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!\n"
+			s += "!!!!!!!!!! FORK DETECTED !!!!!!!!!!!\n"
+			s += "!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!\n"
+			s += "fetchRound called with a cert authenticating block with hash %v.\n"
+			s += "We fetched a valid cert authenticating a different block, %v. This indicates a fork.\n\n"
+			s += "Cert from our agreement service:\n%#v\n\n"
+			s += "Cert from the fetcher:\n%#v\n\n"
+			s += "Block from the fetcher:\n%#v\n\n"
+			s += "!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!\n"
+			s += "!!!!!!!!!! FORK DETECTED !!!!!!!!!!!\n"
+			s += "!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!\n"
+			s = fmt.Sprintf(s, cert.Proposal.BlockDigest, fetchedCert.Proposal.BlockDigest, cert, fetchedCert, block)
+			fmt.Println(s)
+			logging.Base().Error(s)
+		}
+	}
+}
+
+// nextRoundIsNotSupported returns true if the next round upgrades to a protocol version
+// which is not supported.
+// In case of an error, it returns false
+func (s *Service) nextRoundIsNotSupported(nextRound basics.Round) bool {
+	lastLedgerRound := s.ledger.LastRound()
+	supportedUpgrades := config.Consensus
+
+	block, err := s.ledger.Block(lastLedgerRound)
+	if err != nil {
+		s.log.Errorf("nextRoundIsNotSupported: could not retrieve last block (%d) from the ledger : %v", lastLedgerRound, err)
+		return false
+	}
+	bh := block.BlockHeader
+	_, isSupportedUpgrade := supportedUpgrades[bh.NextProtocol]
+
+	if bh.NextProtocolSwitchOn > 0 && !isSupportedUpgrade {
+		// Save the last supported round number
+		// It is not necessary to check bh.NextProtocolSwitchOn < s.lastSupportedRound
+		// since there cannot be two protocol updates scheduled.
+		s.lastSupportedRound = bh.NextProtocolSwitchOn - 1
+
+		if nextRound >= bh.NextProtocolSwitchOn {
+			return true
+		}
+	}
+	return false
+}
+
+// handleUnSupportedRound receives a verified unsupported round: nextUnsupportedRound
+// Checks if the last supported round was added to the ledger, and stops the service.
+func (s *Service) handleUnsupportedRound(nextUnsupportedRound basics.Round) {
+
+	s.log.Infof("Catchup Service: round %d is not approved. Service will stop once the last supported round is added to the ledger.",
+		nextUnsupportedRound)
+
+	// If the next round is an unsupported round, need to stop the
+	// catchup service. Should stop after the last supported round
+	// is added to the ledger.
+	lr := s.ledger.LastRound()
+	// Ledger writes are in order. >= guarantees last supported round is added to the ledger.
+	if lr >= s.lastSupportedRound {
+		s.log.Infof("Catchup Service: finished catching up to the last supported round %d. The subsequent rounds are not supported. Service is stopping.",
+			lr)
+		s.cancel()
+	}
 }

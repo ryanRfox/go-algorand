@@ -1,4 +1,4 @@
-// Copyright (C) 2019 Algorand, Inc.
+// Copyright (C) 2019-2021 Algorand, Inc.
 // This file is part of go-algorand
 //
 // go-algorand is free software: you can redistribute it and/or modify
@@ -52,12 +52,12 @@ func (nps *netPrioStub) MakePrioResponse(challenge string) []byte {
 		Addr:  nps.addr,
 		Prio:  nps.prio,
 	}
-	return protocol.Encode(r)
+	return protocol.EncodeReflect(r)
 }
 
 func (nps *netPrioStub) VerifyPrioResponse(challenge string, response []byte) (addr basics.Address, err error) {
 	var r netPrioStubResponse
-	err = protocol.Decode(response, &r)
+	err = protocol.DecodeReflect(response, &r)
 	if err != nil {
 		return
 	}

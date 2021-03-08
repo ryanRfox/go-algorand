@@ -1,4 +1,4 @@
-// Copyright (C) 2019 Algorand, Inc.
+// Copyright (C) 2019-2021 Algorand, Inc.
 // This file is part of go-algorand
 //
 // go-algorand is free software: you can redistribute it and/or modify
@@ -113,6 +113,31 @@ const ConsensusV20 = ConsensusVersion(
 	"https://github.com/algorandfoundation/specs/tree/4a9db6a25595c6fd097cf9cc137cc83027787eaa",
 )
 
+// ConsensusV21 fixes a bug in credential.lowestOutput
+const ConsensusV21 = ConsensusVersion(
+	"https://github.com/algorandfoundation/specs/tree/8096e2df2da75c3339986317f9abe69d4fa86b4b",
+)
+
+// ConsensusV22 allows tuning the upgrade delay.
+const ConsensusV22 = ConsensusVersion(
+	"https://github.com/algorandfoundation/specs/tree/57016b942f6d97e6d4c0688b373bb0a2fc85a1a2",
+)
+
+// ConsensusV23 fixes lease behavior.
+const ConsensusV23 = ConsensusVersion(
+	"https://github.com/algorandfoundation/specs/tree/e5f565421d720c6f75cdd186f7098495caf9101f",
+)
+
+// ConsensusV24 include the applications, rekeying and teal v2
+const ConsensusV24 = ConsensusVersion(
+	"https://github.com/algorandfoundation/specs/tree/3a83c4c743f8b17adfd73944b4319c25722a6782",
+)
+
+// ConsensusV25 adds support for AssetCloseAmount in the ApplyData
+const ConsensusV25 = ConsensusVersion(
+	"https://github.com/algorandfoundation/specs/tree/bea19289bf41217d2c0af30522fa222ef1366466",
+)
+
 // ConsensusFuture is a protocol that should not appear in any production
 // network, but is used to test features before they are released.
 const ConsensusFuture = ConsensusVersion(
@@ -125,36 +150,7 @@ const ConsensusFuture = ConsensusVersion(
 
 // ConsensusCurrentVersion is the latest version and should be used
 // when a specific version is not provided.
-const ConsensusCurrentVersion = ConsensusV20
-
-// ConsensusTest0 is a version of ConsensusV0 used for testing
-// (it has different approved upgrade paths).
-const ConsensusTest0 = ConsensusVersion("test0")
-
-// ConsensusTest1 is an extension of ConsensusTest0 that
-// supports a sorted-list balance commitment.
-const ConsensusTest1 = ConsensusVersion("test1")
-
-// ConsensusTestBigBlocks is a version of ConsensusV0 used for testing
-// with big block size (large MaxTxnBytesPerBlock).
-// at the time versioning was introduced.
-const ConsensusTestBigBlocks = ConsensusVersion("test-big-blocks")
-
-// ConsensusTestRapidRewardRecalculation is a version of ConsensusCurrentVersion
-// that decreases the RewardRecalculationInterval greatly.
-const ConsensusTestRapidRewardRecalculation = ConsensusVersion("test-fast-reward-recalculation")
-
-// ConsensusTestShorterLookback is a version of ConsensusCurrentVersion
-// that decreases the MaxBalLookback greatly.
-const ConsensusTestShorterLookback = ConsensusVersion("test-shorter-lookback")
-
-// ConsensusTestFastUpgrade is meant for testing of protocol upgrades:
-// during testing, it is equivalent to another protocol with the exception
-// of the upgrade parameters, which allow for upgrades to take place after
-// only a few rounds.
-func ConsensusTestFastUpgrade(proto ConsensusVersion) ConsensusVersion {
-	return "test-fast-upgrade-" + proto
-}
+const ConsensusCurrentVersion = ConsensusV25
 
 // Error is used to indicate that an unsupported protocol has been detected.
 type Error ConsensusVersion

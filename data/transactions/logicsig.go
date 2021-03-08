@@ -1,4 +1,4 @@
-// Copyright (C) 2019 Algorand, Inc.
+// Copyright (C) 2019-2021 Algorand, Inc.
 // This file is part of go-algorand
 //
 // go-algorand is free software: you can redistribute it and/or modify
@@ -22,6 +22,9 @@ import (
 	"github.com/algorand/go-algorand/crypto"
 )
 
+// EvalMaxArgs is the maximum number of arguments to an LSig
+const EvalMaxArgs = 255
+
 // LogicSig contains logic for validating a transaction.
 // LogicSig is signed by an account, allowing delegation of operations.
 // OR
@@ -30,13 +33,13 @@ type LogicSig struct {
 	_struct struct{} `codec:",omitempty,omitemptyarray"`
 
 	// Logic signed by Sig or Msig, OR hashed to be the Address of an account.
-	Logic []byte `codec:"l"`
+	Logic []byte `codec:"l,allocbound=config.MaxLogicSigMaxSize"`
 
 	Sig  crypto.Signature   `codec:"sig"`
 	Msig crypto.MultisigSig `codec:"msig"`
 
 	// Args are not signed, but checked by Logic
-	Args [][]byte `codec:"arg"`
+	Args [][]byte `codec:"arg,allocbound=EvalMaxArgs,allocbound=config.MaxLogicSigMaxSize"`
 }
 
 // Blank returns true if there is no content in this LogicSig

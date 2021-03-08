@@ -1,4 +1,4 @@
-// Copyright (C) 2019 Algorand, Inc.
+// Copyright (C) 2019-2021 Algorand, Inc.
 // This file is part of go-algorand
 //
 // go-algorand is free software: you can redistribute it and/or modify
@@ -26,9 +26,10 @@ import (
 
 	"github.com/stretchr/testify/require"
 
+	generatedV2 "github.com/algorand/go-algorand/daemon/algod/api/server/v2/generated"
+
 	"github.com/algorand/go-algorand/config"
 	"github.com/algorand/go-algorand/crypto"
-	"github.com/algorand/go-algorand/daemon/algod/api/spec/v1"
 	"github.com/algorand/go-algorand/data/basics"
 	"github.com/algorand/go-algorand/data/transactions"
 	"github.com/algorand/go-algorand/libgoal"
@@ -50,7 +51,7 @@ func queuePayments(b *testing.B, wg *sync.WaitGroup, c libgoal.Client, q <-chan 
 			}
 
 			fmt.Printf("Error broadcasting transaction: %v\n", err)
-			time.Sleep(2 * config.Protocol.SmallLambda)
+			time.Sleep(config.Consensus[protocol.ConsensusCurrentVersion].AgreementFilterTimeout)
 		}
 	}
 
@@ -85,7 +86,20 @@ func BenchmarkPaymentsThroughput(b *testing.B) {
 func doBenchTemplate(b *testing.B, template string, moneynode string) {
 	fmt.Printf("Starting to benchmark template %s\n", template)
 
+	// consensusTestBigBlocks is a version of ConsensusV0 used for testing
+	// with big block size (large MaxTxnBytesPerBlock).
+	// at the time versioning was introduced.
+	const consensusTestBigBlocks = protocol.ConsensusVersion("test-big-blocks")
+
 	var fixture fixtures.RestClientFixture
+
+	testBigBlocks := config.Consensus[protocol.ConsensusCurrentVersion]
+	testBigBlocks.MaxTxnBytesPerBlock = 100000000
+	testBigBlocks.ApprovedUpgrades = map[protocol.ConsensusVersion]uint64{}
+
+	fixture.SetConsensus(config.ConsensusProtocols{
+		consensusTestBigBlocks: testBigBlocks,
+	})
 	fixture.Setup(b, filepath.Join("nettemplates", template))
 	defer fixture.Shutdown()
 
@@ -109,7 +123,7 @@ func doBenchTemplate(b *testing.B, template string, moneynode string) {
 	// goroutines to talk to algod and kmd.
 	http.DefaultTransport.(*http.Transport).MaxIdleConnsPerHost = 100
 
-	var status v1.NodeStatus
+	var status generatedV2.NodeStatusResponse
 
 	b.Run(template, func(b *testing.B) {
 		for i := 0; i < b.N; i++ {

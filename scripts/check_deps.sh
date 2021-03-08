@@ -13,19 +13,24 @@
 #
 # Examples: scripts/check_deps.sh
 
-GREEN_FG=$(tput setaf 2)
-RED_FG=$(tput setaf 1)
-TEAL_FG=$(tput setaf 6)
-YELLOW_FG=$(tput setaf 3)
-END_FG_COLOR=$(tput sgr0)
+GREEN_FG=$(tput setaf 2 2>/dev/null)
+RED_FG=$(tput setaf 1 2>/dev/null)
+TEAL_FG=$(tput setaf 6 2>/dev/null)
+YELLOW_FG=$(tput setaf 3 2>/dev/null)
+END_FG_COLOR=$(tput sgr0 2>/dev/null)
 
-GOPATH=$(go env GOPATH)
+UNAME=$(uname)
+if [[ "${UNAME}" == *"MINGW"* ]]; then
+	GOPATH=$HOME/go
+else
+	GOPATH=$(go env GOPATH)
+fi
 export GOPATH
 GO_BIN="$(echo "$GOPATH" | cut -d: -f1)/bin"
 MISSING=0
 
 missing_dep() {
-    echo "$YELLOW_FG[WARNING]$END_FG_COLOR Mising dependency \`$TEAL_FG${1}$END_FG_COLOR\`."
+    echo "$YELLOW_FG[WARNING]$END_FG_COLOR Missing dependency \`$TEAL_FG${1}$END_FG_COLOR\`."
     MISSING=1
 }
 
@@ -33,6 +38,7 @@ GO_DEPS=(
     "$GO_BIN/golint"
     "$GO_BIN/stringer"
     "$GO_BIN/swagger"
+    "$GO_BIN/msgp"
 )
 
 check_deps() {
@@ -51,6 +57,12 @@ check_deps() {
     then
         missing_dep shellcheck
     fi
+
+    # Don't print `sqlite3`s location.
+    if ! which sqlite3 > /dev/null
+    then
+        missing_dep sqlite3
+    fi
 }
 
 check_deps
@@ -59,7 +71,7 @@ if [ $MISSING -eq 0 ]
 then
     echo "$GREEN_FG[$0]$END_FG_COLOR Required dependencies installed."
 else
-    echo -e "$RED_FG[$0]$END_FG_COLOR Required dependencies missing. Run \`${TEAL_FG}./scripts/configure-dev.sh$END_FG_COLOR\` to install."
+    echo -e "$RED_FG[$0]$END_FG_COLOR Required dependencies missing. Run \`${TEAL_FG}./scripts/configure_dev.sh$END_FG_COLOR\` to install."
     exit 1
 fi
 

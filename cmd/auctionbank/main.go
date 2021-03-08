@@ -1,4 +1,4 @@
-// Copyright (C) 2019 Algorand, Inc.
+// Copyright (C) 2019-2021 Algorand, Inc.
 // This file is part of go-algorand
 //
 // go-algorand is free software: you can redistribute it and/or modify
@@ -402,7 +402,7 @@ func depositAuction(w http.ResponseWriter, r *http.Request) {
 
 		var status depositStatus
 		status.Success = true
-		status.SignedDepositNote = protocol.Encode(auction.NoteField{
+		status.SignedDepositNote = protocol.Encode(&auction.NoteField{
 			Type:          auction.NoteDeposit,
 			SignedDeposit: sigDep,
 		})

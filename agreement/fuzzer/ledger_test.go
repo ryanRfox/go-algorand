@@ -1,4 +1,4 @@
-// Copyright (C) 2019 Algorand, Inc.
+// Copyright (C) 2019-2021 Algorand, Inc.
 // This file is part of go-algorand
 //
 // go-algorand is free software: you can redistribute it and/or modify
@@ -124,7 +124,7 @@ type testLedger struct {
 	nextRound basics.Round
 
 	// constant
-	state map[basics.Address]basics.BalanceRecord
+	state map[basics.Address]basics.AccountData
 
 	notifications map[basics.Round]signal
 
@@ -137,7 +137,7 @@ type testLedger struct {
 	catchingUp            bool
 }
 
-func makeTestLedger(state map[basics.Address]basics.BalanceRecord, sync testLedgerSyncFunc) *testLedger {
+func makeTestLedger(state map[basics.Address]basics.AccountData, sync testLedgerSyncFunc) *testLedger {
 	l := new(testLedger)
 	l.Sync = sync
 	l.entries = make(map[basics.Round]bookkeeping.Block)
@@ -145,7 +145,7 @@ func makeTestLedger(state map[basics.Address]basics.BalanceRecord, sync testLedg
 	l.nextRound = 1
 
 	// deep copy of state
-	l.state = make(map[basics.Address]basics.BalanceRecord)
+	l.state = make(map[basics.Address]basics.AccountData)
 	for k, v := range state {
 		l.state[k] = v
 	}
@@ -206,7 +206,7 @@ func (l *testLedger) Seed(r basics.Round) (committee.Seed, error) {
 	defer l.mu.Unlock()
 
 	if r >= l.nextRound {
-		err := fmt.Errorf("Seed for round %v doesn't exists in ledger. Current ledger round is %v", r, l.nextRound-1)
+		err := fmt.Errorf("Seed for round %d doesn't exists in ledger. Current ledger round is %d", r, l.nextRound-1)
 		return committee.Seed{}, err
 	}
 
@@ -219,19 +219,19 @@ func (l *testLedger) LookupDigest(r basics.Round) (crypto.Digest, error) {
 	defer l.mu.Unlock()
 
 	if r >= l.nextRound {
-		err := fmt.Errorf("LookupDigest called on future round: %v >= %v! (this is probably a bug)", r, l.nextRound)
+		err := fmt.Errorf("LookupDigest called on future round: %d >= %d! (this is probably a bug)", r, l.nextRound)
 		panic(err)
 	}
 
 	return l.entries[r].Digest(), nil
 }
 
-func (l *testLedger) BalanceRecord(r basics.Round, a basics.Address) (basics.BalanceRecord, error) {
+func (l *testLedger) Lookup(r basics.Round, a basics.Address) (basics.AccountData, error) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 
 	if r >= l.nextRound {
-		err := fmt.Errorf("BalanceRecord called on future round: %v >= %v! (this is probably a bug)", r, l.nextRound)
+		err := fmt.Errorf("Lookup called on future round: %d >= %d! (this is probably a bug)", r, l.nextRound)
 		panic(err)
 	}
 	return l.state[a], nil
@@ -242,7 +242,7 @@ func (l *testLedger) Circulation(r basics.Round) (basics.MicroAlgos, error) {
 	defer l.mu.Unlock()
 
 	if r >= l.nextRound {
-		err := fmt.Errorf("Circulation called on future round: %v >= %v! (this is probably a bug)", r, l.nextRound)
+		err := fmt.Errorf("Circulation called on future round: %d >= %d! (this is probably a bug)", r, l.nextRound)
 		panic(err)
 	}
 
@@ -263,7 +263,7 @@ func (l *testLedger) EnsureBlock(e bookkeeping.Block, c agreement.Certificate) {
 
 	if _, ok := l.entries[e.Round()]; ok {
 		if l.entries[e.Round()].Digest() != e.Digest() {
-			err := fmt.Errorf("testLedger.EnsureBlock: called with conflicting entries in round %v", e.Round())
+			err := fmt.Errorf("testLedger.EnsureBlock: called with conflicting entries in round %d", e.Round())
 			panic(err)
 		}
 	}
@@ -274,7 +274,7 @@ func (l *testLedger) EnsureBlock(e bookkeeping.Block, c agreement.Certificate) {
 	if l.nextRound == e.Round() {
 		l.nextRound = e.Round() + 1
 	} else if l.nextRound < e.Round() {
-		err := fmt.Errorf("testLedger.EnsureBlock: attempted to write block in future round: %v < %v", l.nextRound, e.Round())
+		err := fmt.Errorf("testLedger.EnsureBlock: attempted to write block in future round: %d < %d", l.nextRound, e.Round())
 		panic(err)
 	}
 
@@ -282,7 +282,7 @@ func (l *testLedger) EnsureBlock(e bookkeeping.Block, c agreement.Certificate) {
 	l.catchingUp = false
 }
 
-func (l *testLedger) EnsureDigest(c agreement.Certificate, quit chan struct{}, verifier *agreement.AsyncVoteVerifier) {
+func (l *testLedger) EnsureDigest(c agreement.Certificate, verifier *agreement.AsyncVoteVerifier) {
 	r := c.Round
 	consistencyCheck := func() bool {
 		l.mu.Lock()
@@ -290,7 +290,7 @@ func (l *testLedger) EnsureDigest(c agreement.Certificate, quit chan struct{}, v
 
 		if r < l.nextRound {
 			if l.entries[r].Digest() != c.Proposal.BlockDigest {
-				err := fmt.Errorf("testLedger.EnsureDigest called with conflicting entries in round %v", r)
+				err := fmt.Errorf("testLedger.EnsureDigest called with conflicting entries in round %d", r)
 				panic(err)
 			}
 			return true

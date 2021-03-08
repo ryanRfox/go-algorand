@@ -1,4 +1,4 @@
-// Copyright (C) 2019 Algorand, Inc.
+// Copyright (C) 2019-2021 Algorand, Inc.
 // This file is part of go-algorand
 //
 // go-algorand is free software: you can redistribute it and/or modify
@@ -82,18 +82,17 @@ func (c *Client) chooseParticipation(address basics.Address, round basics.Round)
 		return
 	}
 
-	nilParticipation := account.Participation{}
 	// Loop through each of the files; pick the one that expires farthest in the future.
 	var expiry basics.Round
 	for _, info := range files {
 		// Use above lambda so the deferred handle closure happens each loop
 		partCandidate, err := checkIfFileIsDesiredKey(info, expiry)
-		if err == nil && partCandidate != nilParticipation {
+		if err == nil && (!partCandidate.Parent.IsZero()) {
 			part = partCandidate
 			expiry = part.LastValid
 		}
 	}
-	if part == nilParticipation {
+	if part.Parent.IsZero() {
 		// Couldn't find one
 		err = fmt.Errorf("Couldn't find a participation key database for address %v valid at round %v in directory %v", address.GetUserAddress(), round, keyDir)
 		return
@@ -132,7 +131,7 @@ func (c *Client) GenParticipationKeysTo(address string, firstValid, lastValid, k
 		return
 	}
 
-	proto, ok := config.Consensus[protocol.ConsensusVersion(stat.LastVersion)]
+	proto, ok := c.consensus[protocol.ConsensusVersion(stat.LastVersion)]
 	if !ok {
 		err = fmt.Errorf("consensus protocol %s not supported", stat.LastVersion)
 		return
@@ -214,7 +213,7 @@ func (c *Client) InstallParticipationKeys(inputfile string) (part account.Partic
 		return
 	}
 
-	proto, ok := config.Consensus[protocol.ConsensusCurrentVersion]
+	proto, ok := c.consensus[protocol.ConsensusCurrentVersion]
 	if !ok {
 		err = fmt.Errorf("Unknown consensus protocol %s", protocol.ConsensusCurrentVersion)
 		return

@@ -1,4 +1,4 @@
-// Copyright (C) 2019 Algorand, Inc.
+// Copyright (C) 2019-2021 Algorand, Inc.
 // This file is part of go-algorand
 //
 // go-algorand is free software: you can redistribute it and/or modify
@@ -161,9 +161,15 @@ type APIV1POSTKeyListRequest struct {
 type APIV1POSTTransactionSignRequest struct {
 	APIV1RequestEnvelope
 	WalletHandleToken string `json:"wallet_handle_token"`
+	// Base64 encoding of msgpack encoding of a `Transaction` object
+	// Note: SDK and goal usually generate `SignedTxn` objects
+	//   in that case, the field `txn` / `Transaction` of the
+	//   generated `SignedTxn` object needs to be used
+	// 
 	// swagger:strfmt byte
-	Transaction    []byte `json:"transaction"`
-	WalletPassword string `json:"wallet_password"`
+	Transaction    []byte           `json:"transaction"`
+	PublicKey      crypto.PublicKey `json:"public_key"`
+	WalletPassword string           `json:"wallet_password"`
 }
 
 // APIV1POSTProgramSignRequest is the request for `POST /v1/program/sign`
@@ -227,6 +233,7 @@ type APIV1POSTMultisigTransactionSignRequest struct {
 	PublicKey      crypto.PublicKey   `json:"public_key"`
 	PartialMsig    crypto.MultisigSig `json:"partial_multisig"`
 	WalletPassword string             `json:"wallet_password"`
+	AuthAddr       crypto.Digest      `json:"signer"`
 }
 
 // APIV1POSTMultisigProgramSignRequest is the request for `POST /v1/multisig/signprogram`

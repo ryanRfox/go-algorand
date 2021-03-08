@@ -3,10 +3,11 @@
 # Create a local private network and run functional tests on it in parallel.
 #
 # Each test is run as `ftest.sh wallet_name` for a wallet with a
-# million Algos.  A test should carefully specify that wallet (or
-# wallets created for the test) for all actions. Tests are expected to
-# not be CPU intensive, merely setting up a handful of transactions
-# and executing them against the network, exercising aspects of the
+# million Algos, with the current directory set to the top of the
+# repo.  A test should carefully specify that wallet (or wallets
+# created for the test) for all actions. Tests are expected to not be
+# CPU intensive, merely setting up a handful of transactions and
+# executing them against the network, exercising aspects of the
 # network and the goal tools.
 #
 # Usage:
@@ -33,6 +34,9 @@ import threading
 import algosdk
 
 logger = logging.getLogger(__name__)
+
+scriptdir = os.path.dirname(os.path.realpath(__file__))
+repodir =  os.path.join(scriptdir, "..", "..")
 
 # less than 16kB of log we show the whole thing, otherwise the last 16kB
 LOG_WHOLE_CUTOFF = 1024 * 16
@@ -79,15 +83,21 @@ def _script_thread_inner(runset, scriptname):
     # send one million Algos to the test wallet's account
     params = algod.suggested_params()
     round = params['lastRound']
-    txn = algosdk.transaction.PaymentTxn(sender=maxpubaddr, fee=params['minFee'], first=round, last=round+100, gh=params['genesishashb64'], receiver=addr, amt=1000000000000, flat_fee=True)
+    max_init_wait_rounds = 5
+    txn = algosdk.transaction.PaymentTxn(sender=maxpubaddr, fee=params['minFee'], first=round, last=round+max_init_wait_rounds, gh=params['genesishashb64'], receiver=addr, amt=1000000000000, flat_fee=True)
     stxn = kmd.sign_transaction(pubw, '', txn)
     txid = algod.send_transaction(stxn)
     ptxinfo = None
-    for i in range(50):
+    for i in range(max_init_wait_rounds):
         txinfo = algod.pending_transaction_info(txid)
         if txinfo.get('round'):
             break
-        time.sleep(0.1)
+        status = algod.status_after_block(round_num=round)
+        round = status['lastRound']
+
+    if ptxinfo is not None:
+        sys.stderr.write('failed to initialize temporary test wallet account for test ({}) for {} rounds.\n'.format(scriptname, max_init_wait_rounds))
+        runset.done(scriptname, False, time.time() - start)
 
     env = dict(runset.env)
     env['TEMPDIR'] = os.path.join(env['TEMPDIR'], walletname)
@@ -98,7 +108,7 @@ def _script_thread_inner(runset, scriptname):
         runset.done(scriptname, False, time.time() - start)
         return
     logger.info('starting %s', scriptname)
-    p = subprocess.Popen([scriptname, walletname], env=env, stdout=cmdlog, stderr=subprocess.STDOUT)
+    p = subprocess.Popen([scriptname, walletname], env=env, cwd=repodir, stdout=cmdlog, stderr=subprocess.STDOUT)
     cmdlog.close()
     runset.running(scriptname, p)
     timeout = read_script_for_timeout(scriptname)
@@ -109,22 +119,23 @@ def _script_thread_inner(runset, scriptname):
         retcode = -1
     dt = time.time() - start
     if retcode != 0:
-        logger.error('%s failed in %f seconds', scriptname, dt)
-        st = os.stat(cmdlogpath)
-        with open(cmdlogpath, 'r') as fin:
-            if st.st_size > LOG_WHOLE_CUTOFF:
-                fin.seek(st.st_size - LOG_WHOLE_CUTOFF)
-                text = fin.read()
-                lines = text.splitlines()
-                if len(lines) > 1:
-                    # drop probably-partial first line
-                    lines = lines[1:]
-                sys.stderr.write('end of log follows:\n')
-                sys.stderr.write('\n'.join(lines))
-                sys.stderr.write('\n\n')
-            else:
-                sys.stderr.write('whole log follows:\n')
-                sys.stderr.write(fin.read())
+        with runset.lock:
+            logger.error('%s failed in %f seconds', scriptname, dt)
+            st = os.stat(cmdlogpath)
+            with open(cmdlogpath, 'r') as fin:
+                if st.st_size > LOG_WHOLE_CUTOFF:
+                    fin.seek(st.st_size - LOG_WHOLE_CUTOFF)
+                    text = fin.read()
+                    lines = text.splitlines()
+                    if len(lines) > 1:
+                        # drop probably-partial first line
+                        lines = lines[1:]
+                    sys.stderr.write('end of log follows ({}):\n'.format(scriptname))
+                    sys.stderr.write('\n'.join(lines))
+                    sys.stderr.write('\n\n')
+                else:
+                    sys.stderr.write('whole log follows ({}):\n'.format(scriptname))
+                    sys.stderr.write(fin.read())
     else:
         logger.info('finished %s OK in %f seconds', scriptname, dt)
     runset.done(scriptname, retcode == 0, dt)
@@ -173,8 +184,8 @@ class RunSet:
         if self.algod and self.kmd:
             return
         # should run from inside self.lock
-        xrun(['goal', 'kmd', 'start', '-t', '200'], env=self.env, timeout=5)
         algodata = self.env['ALGORAND_DATA']
+        xrun(['goal', 'kmd', 'start', '-t', '3600','-d', algodata], env=self.env, timeout=5)
         self.kmd = openkmd(algodata)
         self.algod = openalgod(algodata)
 
@@ -264,12 +275,58 @@ class RunSet:
                 self.ok = False
                 self._terminate()
 
-def goal_network_stop(netdir):
+
+# 'network stop' and 'network delete' are also tested and used as cleanup procedures
+# so it re-raises exception in 'test' mode
+already_stopped = False
+already_deleted = False
+
+def goal_network_stop(netdir, env, normal_cleanup=False):
+    global already_stopped, already_deleted
+    if already_stopped or already_deleted:
+        return
+
     logger.info('stop network in %s', netdir)
     try:
         xrun(['goal', 'network', 'stop', '-r', netdir], timeout=10)
     except Exception as e:
         logger.error('error stopping network', exc_info=True)
+        if normal_cleanup:
+            raise e
+    try:
+        algodata = env['ALGORAND_DATA']
+        logger.info('stop kmd in %s', algodata)
+        xrun(['goal', 'kmd', 'stop', '-d', algodata], timeout=5)
+    except Exception as e:
+        logger.error('error stopping kmd', exc_info=True)
+        if normal_cleanup:
+            raise e
+    already_stopped = True
+
+def goal_network_delete(netdir, normal_cleanup=False):
+    global already_deleted
+    if already_deleted:
+        return
+
+    logger.info('delete network in %s', netdir)
+    try:
+        xrun(['goal', 'network', 'delete', '-r', netdir], timeout=10)
+    except Exception as e:
+        logger.error('error deleting network', exc_info=True)
+        if normal_cleanup:
+            raise e
+    already_deleted = True
+
+def reportcomms(p, stdout, stderr):
+    cmdr = repr(p.args)
+    if not stdout and p.stdout:
+        stdout = p.stdout.read()
+    if not stderr and p.stderr:
+        stderr = p.stderr.read()
+    if stdout:
+        sys.stderr.write('output from {}:\n{}\n\n'.format(cmdr, stdout))
+    if stderr:
+        sys.stderr.write('stderr from {}:\n{}\n\n'.format(cmdr, stderr))
 
 def xrun(cmd, *args, **kwargs):
     timeout = kwargs.pop('timeout', None)
@@ -282,32 +339,21 @@ def xrun(cmd, *args, **kwargs):
         raise
     try:
         if timeout:
-            p.communicate(timeout=timeout)
+            stdout,stderr = p.communicate(timeout=timeout)
         else:
-            p.communicate()
+            stdout,stderr = p.communicate()
     except subprocess.TimeoutExpired as te:
-        cmdr = repr(cmd)
-        logger.error('subprocess timed out {}'.format(cmdr), exc_info=True)
-        if p.stdout:
-            sys.stderr.write('output from {}:\n{}\n\n'.format(cmdr, p.stdout))
-        if p.stderr:
-            sys.stderr.write('stderr from {}:\n{}\n\n'.format(cmdr, p.stderr))
+        logger.error('subprocess timed out {!r}'.format(cmd), exc_info=True)
+        reportcomms(p, stdout, stderr)
         raise
     except Exception as e:
-        cmdr = repr(cmd)
-        logger.error('subprocess exception {}'.format(cmdr), exc_info=True)
-        if p.stdout:
-            sys.stderr.write('output from {}:\n{}\n\n'.format(cmdr, p.stdout))
-        if p.stderr:
-            sys.stderr.write('stderr from {}:\n{}\n\n'.format(cmdr, p.stderr))
+        logger.error('subprocess exception {!r}'.format(cmd), exc_info=True)
+        reportcomms(p, stdout, stderr)
         raise
     if p.returncode != 0:
         cmdr = repr(cmd)
         logger.error('cmd failed {}'.format(cmdr))
-        if p.stdout:
-            sys.stderr.write('output from {}:\n{}\n\n'.format(cmdr, p.stdout))
-        if p.stderr:
-            sys.stderr.write('stderr from {}:\n{}\n\n'.format(cmdr, p.stderr))
+        reportcomms(p, stdout, stderr)
         raise Exception('error: cmd failed: {}'.format(cmdr))
 
 _logging_format = '%(asctime)s :%(lineno)d %(message)s'
@@ -345,15 +391,10 @@ def main():
     netdir = os.path.join(tempdir, 'net')
     env['NETDIR'] = netdir
 
-    gopath = os.getenv('GOPATH')
-    if not gopath:
-        logger.error('$GOPATH not set')
-        sys.exit(1)
-
     retcode = 0
-    xrun(['goal', 'network', 'create', '-r', netdir, '-n', 'tbd', '-t', os.path.join(gopath, 'src/github.com/algorand/go-algorand/test/testdata/nettemplates/TwoNodes50EachFuture.json')], timeout=30)
-    xrun(['goal', 'network', 'start', '-r', netdir], timeout=30)
-    atexit.register(goal_network_stop, netdir)
+    xrun(['goal', 'network', 'create', '-r', netdir, '-n', 'tbd', '-t', os.path.join(repodir, 'test/testdata/nettemplates/TwoNodes50EachFuture.json')], timeout=90)
+    xrun(['goal', 'network', 'start', '-r', netdir], timeout=90)
+    atexit.register(goal_network_stop, netdir, env)
 
     env['ALGORAND_DATA'] = os.path.join(netdir, 'Node')
     env['ALGORAND_DATA2'] = os.path.join(netdir, 'Primary')
@@ -371,6 +412,12 @@ def main():
     else:
         logger.info('finished OK %f seconds', time.time() - start)
     logger.info('statuses-json: %s', json.dumps(rs.statuses))
+
+    # ensure 'network stop' and 'network delete' also make they job
+    goal_network_stop(netdir, env, normal_cleanup=True)
+    if not args.keep_temps:
+        goal_network_delete(netdir, normal_cleanup=True)
+
     return retcode
 
 if __name__ == '__main__':

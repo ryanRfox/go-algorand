@@ -16,15 +16,15 @@ ACCOUNTA=$(${gcmd} account new|awk '{ print $6 }')
 ACCOUNTB=$(${gcmd} account new|awk '{ print $6 }')
 LEASE=YmxhaCBibGFoIGxlYXNlIHdoYXRldmVyIGJsYWghISE=
 
-DUR=4
-PERIOD=4
+DUR=8
+PERIOD=8
 EXPIRE=10000
 FEE=100000
 
 echo "generating new delegate and participation keys for newly-funded account ${ACCOUNTA}"
 ${gcmd} clerk send --from ${ACCOUNT} --to ${ACCOUNTA} -a 1000000
 DELKEY=$(algokey generate -f ${TEMPDIR}/delegate.keyregkey | grep "Public key" | awk '{ print $3 }')
-algotmpl -d ${GOPATH}/src/github.com/algorand/go-algorand/tools/teal/templates/ delegate-key-registration --fee ${FEE} --dur ${DUR} --period ${PERIOD} --expire ${EXPIRE} --auth ${DELKEY} --lease ${LEASE} > ${TEMPDIR}/delegate.teal
+algotmpl -d tools/teal/templates/ delegate-key-registration --fee ${FEE} --dur ${DUR} --period ${PERIOD} --expire ${EXPIRE} --auth ${DELKEY} --lease ${LEASE} > ${TEMPDIR}/delegate.teal
 ${gcmd} clerk compile -a ${ACCOUNTA} -s -o ${TEMPDIR}/kr.lsig ${TEMPDIR}/delegate.teal
 
 RES=$(${gcmd} account addpartkey -a ${ACCOUNTA} --roundFirstValid 0 --roundLastValid 100)
@@ -39,8 +39,8 @@ cat<<EOF|python - > ${TEMPDIR}/pbound
 print(((${ROUND} // ${PERIOD}) * ${PERIOD}) + ${PERIOD})
 EOF
 PBOUND=$(cat ${TEMPDIR}/pbound)
-while [ ${ROUND} != ${PBOUND} ]; do
-    goal node wait
+while [ ${ROUND} -lt ${PBOUND} ]; do
+    goal node wait --waittime 30
     ROUND=$(goal node status | grep 'Last committed block:'|awk '{ print $4 }')
 done
 
@@ -100,7 +100,7 @@ ${gcmd} account changeonlinestatus -a ${ACCOUNTA} -x ${LEASE} --online --firstva
 dsign ${TEMPDIR}/delegate.keyregkey ${TEMPDIR}/kr.lsig < ${TEMPDIR}/keyreg.tx > ${TEMPDIR}/keyreg.stx
 
 RES=$(${gcmd} clerk rawsend -f ${TEMPDIR}/keyreg.stx || true)
-EXPERROR='already in ledger'
+EXPERROR='using an overlapping lease'
 if [[ $RES != *"${EXPERROR}"* ]]; then
     date '+keyreg-teal-test FAIL replayed txn should be rejected %Y%m%d_%H%M%S'
     false
@@ -115,7 +115,7 @@ FEE=100000
 
 ${gcmd} clerk send --from ${ACCOUNT} --to ${ACCOUNTB} -a 1000000
 DELKEY=$(algokey generate -f ${TEMPDIR}/delegate.keyregkey | grep "Public key" | awk '{ print $3 }')
-algotmpl -d ${GOPATH}/src/github.com/algorand/go-algorand/tools/teal/templates/ delegate-key-registration --fee ${FEE} --dur ${DUR} --period ${PERIOD} --expire ${EXPIRE} --auth ${DELKEY} --lease ${LEASE} > ${TEMPDIR}/delegate.teal
+algotmpl -d tools/teal/templates/ delegate-key-registration --fee ${FEE} --dur ${DUR} --period ${PERIOD} --expire ${EXPIRE} --auth ${DELKEY} --lease ${LEASE} > ${TEMPDIR}/delegate.teal
 ${gcmd} clerk compile -a ${ACCOUNTB} -s -o ${TEMPDIR}/kr.lsig ${TEMPDIR}/delegate.teal
 
 RES=$(${gcmd} account addpartkey -a ${ACCOUNTB} --roundFirstValid 0 --roundLastValid 100)
@@ -127,7 +127,7 @@ fi
 echo "wait for valid duration to pass"
 ROUND=$(goal node status | grep 'Last committed block:'|awk '{ print $4 }')
 while [ ${ROUND} -lt `expr ${EXPIRE} + 1` ]; do
-    goal node wait
+    goal node wait --waittime 30
     ROUND=$(goal node status | grep 'Last committed block:'|awk '{ print $4 }')
 done
 

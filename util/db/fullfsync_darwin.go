@@ -1,4 +1,4 @@
-// Copyright (C) 2019 Algorand, Inc.
+// Copyright (C) 2019-2021 Algorand, Inc.
 // This file is part of go-algorand
 //
 // go-algorand is free software: you can redistribute it and/or modify
@@ -18,5 +18,5 @@ package db
 
 func init() {
 	// See https://www.sqlite.org/pragma.html#pragma_fullfsync
-	initStatements = append(initStatements, "PRAGMA fullfsync=true")
+	enableFullfsyncStatements = append(enableFullfsyncStatements, "PRAGMA fullfsync=true")
 }

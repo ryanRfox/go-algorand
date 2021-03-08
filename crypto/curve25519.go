@@ -1,4 +1,4 @@
-// Copyright (C) 2019 Algorand, Inc.
+// Copyright (C) 2019-2021 Algorand, Inc.
 // This file is part of go-algorand
 //
 // go-algorand is free software: you can redistribute it and/or modify
@@ -17,8 +17,16 @@
 package crypto
 
 // #cgo CFLAGS: -Wall -std=c99
-// #cgo CFLAGS: -I${SRCDIR}/include
-// #cgo LDFLAGS: ${SRCDIR}/lib/libsodium.a
+// #cgo darwin,amd64 CFLAGS: -I${SRCDIR}/libs/darwin/amd64/include
+// #cgo darwin,amd64 LDFLAGS: ${SRCDIR}/libs/darwin/amd64/lib/libsodium.a
+// #cgo linux,amd64 CFLAGS: -I${SRCDIR}/libs/linux/amd64/include
+// #cgo linux,amd64 LDFLAGS: ${SRCDIR}/libs/linux/amd64/lib/libsodium.a
+// #cgo linux,arm64 CFLAGS: -I${SRCDIR}/libs/linux/arm64/include
+// #cgo linux,arm64 LDFLAGS: ${SRCDIR}/libs/linux/arm64/lib/libsodium.a
+// #cgo linux,arm CFLAGS: -I${SRCDIR}/libs/linux/arm/include
+// #cgo linux,arm LDFLAGS: ${SRCDIR}/libs/linux/arm/lib/libsodium.a
+// #cgo windows,amd64 CFLAGS: -I${SRCDIR}/libs/windows/amd64/include
+// #cgo windows,amd64 LDFLAGS: ${SRCDIR}/libs/windows/amd64/lib/libsodium.a
 // #include <stdint.h>
 // #include "sodium.h"
 import "C"
@@ -48,17 +56,22 @@ func init() {
 		logging.Init()
 		logging.Base().Fatal("failed to initialize libsodium!")
 	}
+
+	// Check sizes of structs
+	_ = [C.crypto_sign_ed25519_BYTES]byte(ed25519Signature{})
+	_ = [C.crypto_sign_ed25519_PUBLICKEYBYTES]byte(ed25519PublicKey{})
+	_ = [C.crypto_sign_ed25519_SECRETKEYBYTES]byte(ed25519PrivateKey{})
+	_ = [C.crypto_sign_ed25519_SEEDBYTES]byte(ed25519Seed{})
 }
 
 // A Seed holds the entropy needed to generate cryptographic keys.
 type Seed ed25519Seed
 
 /* Classical signatures */
-
-type ed25519Signature [C.crypto_sign_ed25519_BYTES]byte
-type ed25519PublicKey [C.crypto_sign_ed25519_PUBLICKEYBYTES]byte
-type ed25519PrivateKey [C.crypto_sign_ed25519_SECRETKEYBYTES]byte
-type ed25519Seed [C.crypto_sign_ed25519_SEEDBYTES]byte
+type ed25519Signature [64]byte
+type ed25519PublicKey [32]byte
+type ed25519PrivateKey [64]byte
+type ed25519Seed [32]byte
 
 // MasterDerivationKey is used to derive ed25519 keys for use in wallets
 type MasterDerivationKey [masterDerivationKeyLenBytes]byte
@@ -112,6 +125,14 @@ func ed25519Verify(public ed25519PublicKey, data []byte, sig ed25519Signature) b
 // produced by a holder of a cryptographic secret.
 type Signature ed25519Signature
 
+// BlankSignature is an empty signature structure, containing nothing but zeroes
+var BlankSignature = Signature{}
+
+// Blank tests to see if the given signature contains only zeros
+func (s *Signature) Blank() bool {
+	return (*s) == BlankSignature
+}
+
 // A SignatureVerifier is used to identify the holder of SignatureSecrets
 // and verify the authenticity of Signatures.
 type SignatureVerifier = PublicKey
@@ -119,6 +140,8 @@ type SignatureVerifier = PublicKey
 // SignatureSecrets are used by an entity to produce unforgeable signatures over
 // a message.
 type SignatureSecrets struct {
+	_struct struct{} `codec:""`
+
 	SignatureVerifier
 	SK ed25519PrivateKey
 }

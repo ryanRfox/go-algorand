@@ -1,4 +1,4 @@
-// Copyright (C) 2019 Algorand, Inc.
+// Copyright (C) 2019-2021 Algorand, Inc.
 // This file is part of go-algorand
 //
 // go-algorand is free software: you can redistribute it and/or modify
@@ -35,17 +35,19 @@ import (
 
 	"github.com/stretchr/testify/assert"
 
+	generatedV2 "github.com/algorand/go-algorand/daemon/algod/api/server/v2/generated"
+
 	"github.com/algorand/go-algorand/auction"
 	auctionClient "github.com/algorand/go-algorand/auction/client"
 	"github.com/algorand/go-algorand/crypto"
 	"github.com/algorand/go-algorand/daemon/algod/api/client"
-	"github.com/algorand/go-algorand/daemon/algod/api/spec/v1"
 	"github.com/algorand/go-algorand/daemon/kmd/lib/kmdapi"
 	"github.com/algorand/go-algorand/data/basics"
 	"github.com/algorand/go-algorand/data/transactions"
 	"github.com/algorand/go-algorand/libgoal"
 	"github.com/algorand/go-algorand/logging"
 	"github.com/algorand/go-algorand/protocol"
+	"github.com/algorand/go-algorand/util"
 )
 
 const (
@@ -220,7 +222,7 @@ func (f *AuctionFixture) Stop(pidFile string) error {
 		return err
 	}
 
-	err = syscall.Kill(int(pid), syscall.SIGTERM)
+	err = util.KillProcess(int(pid), syscall.SIGTERM)
 	if err != nil {
 		f.t.Errorf("Unable to kill PID: %d", pid)
 		return err
@@ -234,7 +236,7 @@ func (f *AuctionFixture) Stop(pidFile string) error {
 		}
 		select {
 		case <-waitLong:
-			return syscall.Kill(int(pid), syscall.SIGKILL)
+			return util.KillProcess(int(pid), syscall.SIGKILL)
 		case <-time.After(time.Millisecond * 100):
 		}
 	}
@@ -537,7 +539,7 @@ func (f *AuctionFixture) readAndDecode(filePath string, obj interface{}) {
 		return
 	}
 
-	err = protocol.Decode(data, obj)
+	err = protocol.DecodeReflect(data, obj)
 	if err != nil {
 		f.t.Errorf("Decoding from %s: %v", filePath, err)
 		return
@@ -842,7 +844,7 @@ func (f *AuctionFixture) signBid(walletHandle []byte, password string, account s
 		return
 	}
 
-	signedBidNote = client.BytesBase64(protocol.Encode(auction.NoteField{
+	signedBidNote = client.BytesBase64(protocol.Encode(&auction.NoteField{
 		Type: auction.NoteBid,
 		SignedBid: auction.SignedBid{
 			Bid: bid,
@@ -964,7 +966,7 @@ func (f *AuctionFixture) CrossVerifyEndOfAuction(params auction.Params, outcome 
 }
 
 // WaitForNextRound is a utility function to wait for next round
-func (f *AuctionFixture) WaitForNextRound() (newAlgodStatus v1.NodeStatus, err error) {
+func (f *AuctionFixture) WaitForNextRound() (newAlgodStatus generatedV2.NodeStatusResponse, err error) {
 	// get the algod rest client
 	algodRestClient := f.GetAlgodRestClient()
 	algodStatus, err := algodRestClient.Status()

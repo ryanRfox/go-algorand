@@ -1,4 +1,4 @@
-// Copyright (C) 2019 Algorand, Inc.
+// Copyright (C) 2019-2021 Algorand, Inc.
 // This file is part of go-algorand
 //
 // go-algorand is free software: you can redistribute it and/or modify
@@ -23,6 +23,7 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"github.com/algorand/go-algorand/config"
 	"github.com/algorand/go-algorand/netdeploy"
 	"github.com/algorand/go-algorand/util"
 )
@@ -93,7 +94,14 @@ var networkCreateCmd = &cobra.Command{
 			panic(err)
 		}
 
-		network, err := netdeploy.CreateNetworkFromTemplate(networkName, networkRootDir, networkTemplateFile, binDir, !noImportKeys)
+		dataDir := maybeSingleDataDir()
+		var consensus config.ConsensusProtocols
+		if dataDir != "" {
+			// try to load the consensus from there. If there is none, we can just use the built in one.
+			consensus, _ = config.PreloadConfigurableConsensusProtocols(dataDir)
+		}
+
+		network, err := netdeploy.CreateNetworkFromTemplate(networkName, networkRootDir, networkTemplateFile, binDir, !noImportKeys, nil, consensus)
 		if err != nil {
 			if noClean {
 				reportInfof(" ** failed ** - Preserving network rootdir '%s'", networkRootDir)
@@ -126,7 +134,7 @@ func getNetworkAndBinDir() (netdeploy.Network, string) {
 var networkStartCmd = &cobra.Command{
 	Use:   "start",
 	Short: "Start a deployed private network",
-	Long:  `Start a deployed private network`,
+	Long:  `Start a deployed private network by starting each individual node.`,
 	Args:  validateNoPosArgsFn,
 	Run: func(cmd *cobra.Command, _ []string) {
 		network, binDir := getNetworkAndBinDir()
@@ -149,7 +157,6 @@ var networkStartCmd = &cobra.Command{
 var networkRestartCmd = &cobra.Command{
 	Use:   "restart",
 	Short: "Restart a deployed private network",
-	Long:  `Restart a deployed private network`,
 	Args:  validateNoPosArgsFn,
 	Run: func(cmd *cobra.Command, _ []string) {
 		network, binDir := getNetworkAndBinDir()
@@ -165,7 +172,6 @@ var networkRestartCmd = &cobra.Command{
 var networkStopCmd = &cobra.Command{
 	Use:   "stop",
 	Short: "Stop a deployed private network",
-	Long:  `Stop a deployed private network`,
 	Args:  validateNoPosArgsFn,
 	Run: func(cmd *cobra.Command, _ []string) {
 		network, binDir := getNetworkAndBinDir()
@@ -177,7 +183,6 @@ var networkStopCmd = &cobra.Command{
 var networkStatusCmd = &cobra.Command{
 	Use:   "status",
 	Short: "Prints status for all nodes in a deployed private network",
-	Long:  `Prints status for all nodes in a deployed private network`,
 	Args:  validateNoPosArgsFn,
 	Run: func(cmd *cobra.Command, _ []string) {
 		network, binDir := getNetworkAndBinDir()

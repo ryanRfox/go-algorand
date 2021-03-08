@@ -1,4 +1,4 @@
-// Copyright (C) 2019 Algorand, Inc.
+// Copyright (C) 2019-2021 Algorand, Inc.
 // This file is part of go-algorand
 //
 // go-algorand is free software: you can redistribute it and/or modify
@@ -34,6 +34,7 @@ import (
 
 	"github.com/algorand/go-algorand/config"
 	apiServer "github.com/algorand/go-algorand/daemon/algod/api/server"
+	"github.com/algorand/go-algorand/daemon/algod/api/server/lib"
 	"github.com/algorand/go-algorand/data/bookkeeping"
 	"github.com/algorand/go-algorand/logging"
 	"github.com/algorand/go-algorand/logging/telemetryspec"
@@ -55,15 +56,15 @@ type Server struct {
 	node                 *node.AlgorandFullNode
 	metricCollector      *metrics.MetricService
 	metricServiceStarted bool
-
-	stopping deadlock.Mutex
-	stopped  bool
+	stopping             chan struct{}
 }
 
 // Initialize creates a Node instance with applicable network services
-func (s *Server) Initialize(cfg config.Local) error {
+func (s *Server) Initialize(cfg config.Local, phonebookAddresses []string, genesisText string) error {
 	// set up node
 	s.log = logging.Base()
+
+	lib.GenesisJSONText = genesisText
 
 	liveLog := filepath.Join(s.RootPath, "node.log")
 	archive := filepath.Join(s.RootPath, cfg.LogArchiveName)
@@ -102,10 +103,12 @@ func (s *Server) Initialize(cfg config.Local) error {
 	// collected metrics decorations.
 	fmt.Fprintln(logWriter, "++++++++++++++++++++++++++++++++++++++++")
 	fmt.Fprintln(logWriter, "Logging Starting")
-	if s.log.GetTelemetryEnabled() {
+	if s.log.GetTelemetryUploadingEnabled() {
+		// May or may not be logging to node.log
 		fmt.Fprintf(logWriter, "Telemetry Enabled: %s\n", s.log.GetTelemetryHostName())
 		fmt.Fprintf(logWriter, "Session: %s\n", s.log.GetTelemetrySession())
 	} else {
+		// May or may not be logging to node.log
 		fmt.Fprintln(logWriter, "Telemetry Disabled")
 	}
 	fmt.Fprintln(logWriter, "++++++++++++++++++++++++++++++++++++++++")
@@ -121,13 +124,7 @@ func (s *Server) Initialize(cfg config.Local) error {
 			NodeExporterPath:          cfg.NodeExporterPath,
 		})
 
-	ex, err := os.Executable()
-	if err != nil {
-		return fmt.Errorf("cannot locate node executable: %s", err)
-	}
-	phonebookDir := filepath.Dir(ex)
-
-	s.node, err = node.MakeFull(s.log, s.RootPath, cfg, phonebookDir, s.Genesis)
+	s.node, err = node.MakeFull(s.log, s.RootPath, cfg, phonebookAddresses, s.Genesis)
 	if os.IsNotExist(err) {
 		return fmt.Errorf("node has not been installed: %s", err)
 	}
@@ -178,9 +175,13 @@ func (s *Server) Start() {
 		os.Exit(1)
 	}
 
-	// use the data dir as the static file dir (for our API server), there's
-	// no need to separate the two yet. This lets us serve the swagger.json file.
-	apiHandler := apiServer.NewRouter(s.log, s.node, apiToken)
+	adminAPIToken, err := tokens.GetAndValidateAPIToken(s.RootPath, tokens.AlgodAdminTokenFilename)
+	if err != nil {
+		fmt.Printf("APIToken error: %v\n", err)
+		os.Exit(1)
+	}
+
+	s.stopping = make(chan struct{})
 
 	addr := cfg.EndpointAddress
 	if addr == "" {
@@ -197,21 +198,17 @@ func (s *Server) Start() {
 	addr = listener.Addr().String()
 	server = http.Server{
 		Addr:         addr,
-		Handler:      apiHandler,
 		ReadTimeout:  time.Duration(cfg.RestReadTimeoutSeconds) * time.Second,
 		WriteTimeout: time.Duration(cfg.RestWriteTimeoutSeconds) * time.Second,
 	}
 
-	defer s.Stop()
-
 	tcpListener := listener.(*net.TCPListener)
-	errChan := make(chan error, 1)
-	go func() {
-		err = server.Serve(tcpListener)
-		errChan <- err
-	}()
+
+	e := apiServer.NewRouter(s.log, s.node, s.stopping, apiToken, adminAPIToken, tcpListener)
 
 	// Set up files for our PID and our listening address
+	// before beginning to listen to prevent 'goal node start'
+	// quit earlier than these service files get created
 	s.pidFile = filepath.Join(s.RootPath, "algod.pid")
 	s.netFile = filepath.Join(s.RootPath, "algod.net")
 	ioutil.WriteFile(s.pidFile, []byte(fmt.Sprintf("%d\n", os.Getpid())), 0644)
@@ -223,34 +220,38 @@ func (s *Server) Start() {
 		ioutil.WriteFile(s.netListenFile, []byte(fmt.Sprintf("%s\n", listenAddr)), 0644)
 	}
 
+	errChan := make(chan error, 1)
+	go func() {
+		err := e.StartServer(&server)
+		errChan <- err
+	}()
+
 	// Handle signals cleanly
 	c := make(chan os.Signal)
 	signal.Notify(c, os.Interrupt, syscall.SIGTERM, syscall.SIGINT)
 	signal.Ignore(syscall.SIGHUP)
-	go func() {
-		sig := <-c
+
+	fmt.Printf("Node running and accepting RPC requests over HTTP on port %v. Press Ctrl-C to exit\n", addr)
+	select {
+	case err := <-errChan:
+		if err != nil {
+			s.log.Warn(err)
+		} else {
+			s.log.Info("Node exited successfully")
+		}
+		s.Stop()
+	case sig := <-c:
 		fmt.Printf("Exiting on %v\n", sig)
 		s.Stop()
 		os.Exit(0)
-	}()
-
-	fmt.Printf("Node running and accepting RPC requests over HTTP on port %v. Press Ctrl-C to exit\n", addr)
-	err = <-errChan
-	if err != nil {
-		s.log.Warn(err)
-	} else {
-		s.log.Info("Node exited successfully")
 	}
 }
 
 // Stop initiates a graceful shutdown of the node by shutting down the network server.
 func (s *Server) Stop() {
-	s.stopping.Lock()
-	defer s.stopping.Unlock()
-
-	if s.stopped {
-		return
-	}
+	// close the s.stopping, which would signal the rest api router that any pending commands
+	// should be aborted.
+	close(s.stopping)
 
 	// Attempt to log a shutdown event before we exit...
 	s.log.Event(telemetryspec.ApplicationState, telemetryspec.ShutdownEvent)
@@ -275,12 +276,4 @@ func (s *Server) Stop() {
 	os.Remove(s.pidFile)
 	os.Remove(s.netFile)
 	os.Remove(s.netListenFile)
-
-	s.stopped = true
-}
-
-// OverridePhonebook is used to replace the phonebook associated with
-// the server's node.
-func (s *Server) OverridePhonebook(dialOverride ...string) {
-	s.node.ReplacePeerList(dialOverride...)
 }

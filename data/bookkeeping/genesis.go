@@ -1,4 +1,4 @@
-// Copyright (C) 2019 Algorand, Inc.
+// Copyright (C) 2019-2021 Algorand, Inc.
 // This file is part of go-algorand
 //
 // go-algorand is free software: you can redistribute it and/or modify
@@ -21,6 +21,14 @@ import (
 
 	"github.com/algorand/go-algorand/data/basics"
 	"github.com/algorand/go-algorand/protocol"
+)
+
+const (
+	// MaxInitialGenesisAllocationSize is the maximum number of accounts that are supported when
+	// bootstrapping a new network. The number of account *can* grow further after the bootstrapping.
+	// This value is used exclusively for the messagepack decoder, and has no affect on the network
+	// capabilities/capacity in any way.
+	MaxInitialGenesisAllocationSize = 100000000
 )
 
 // A Genesis object defines an Algorand "universe" -- a set of nodes that can
@@ -47,7 +55,7 @@ type Genesis struct {
 	Proto protocol.ConsensusVersion `codec:"proto"`
 
 	// Allocation determines the initial accounts and their state.
-	Allocation []GenesisAllocation `codec:"alloc"`
+	Allocation []GenesisAllocation `codec:"alloc,allocbound=MaxInitialGenesisAllocationSize"`
 
 	// RewardsPool is the address of the rewards pool.
 	RewardsPool string `codec:"rwd"`
@@ -86,6 +94,11 @@ func (genesis Genesis) ID() string {
 // representing, and is purely informational.  State is the initial
 // account state.
 type GenesisAllocation struct {
+	// Unfortunately we forgot to specify omitempty, and now
+	// this struct must be encoded without omitempty for the
+	// Address, Comment, and State fields..
+	_struct struct{} `codec:""`
+
 	Address string             `codec:"addr"`
 	Comment string             `codec:"comment"`
 	State   basics.AccountData `codec:"state"`
@@ -93,5 +106,5 @@ type GenesisAllocation struct {
 
 // ToBeHashed impements the crypto.Hashable interface.
 func (genesis Genesis) ToBeHashed() (protocol.HashID, []byte) {
-	return protocol.Genesis, protocol.Encode(genesis)
+	return protocol.Genesis, protocol.Encode(&genesis)
 }

@@ -1,4 +1,4 @@
-// Copyright (C) 2019 Algorand, Inc.
+// Copyright (C) 2019-2021 Algorand, Inc.
 // This file is part of go-algorand
 //
 // go-algorand is free software: you can redistribute it and/or modify
@@ -17,10 +17,13 @@
 package protocol
 
 import (
+	"fmt"
 	"io"
+	"os"
 	"sync"
 
 	"github.com/algorand/go-codec/codec"
+	"github.com/algorand/msgp/msgp"
 )
 
 // CodecHandle is used to instantiate msgpack encoders and decoders
@@ -30,6 +33,10 @@ var CodecHandle *codec.MsgpackHandle
 // JSONHandle is used to instantiate JSON encoders and decoders
 // with our settings (canonical, paranoid about decoding errors)
 var JSONHandle *codec.JsonHandle
+
+// JSONStrictHandle is the same as JSONHandle but with MapKeyAsString=true
+// for correct maps[int]interface{} encoding
+var JSONStrictHandle *codec.JsonHandle
 
 // Decoder is our interface for a thing that can decode objects.
 type Decoder interface {
@@ -53,6 +60,15 @@ func init() {
 	JSONHandle.RecursiveEmptyCheck = true
 	JSONHandle.Indent = 2
 	JSONHandle.HTMLCharsAsIs = true
+
+	JSONStrictHandle = new(codec.JsonHandle)
+	JSONStrictHandle.ErrorIfNoField = JSONHandle.ErrorIfNoField
+	JSONStrictHandle.ErrorIfNoArrayExpand = JSONHandle.ErrorIfNoArrayExpand
+	JSONStrictHandle.Canonical = JSONHandle.Canonical
+	JSONStrictHandle.RecursiveEmptyCheck = JSONHandle.RecursiveEmptyCheck
+	JSONStrictHandle.Indent = JSONHandle.Indent
+	JSONStrictHandle.HTMLCharsAsIs = JSONHandle.HTMLCharsAsIs
+	JSONStrictHandle.MapKeyAsString = true
 }
 
 type codecBytes struct {
@@ -80,8 +96,9 @@ var codecStreamPool = sync.Pool{
 
 const initEncodeBufSize = 256
 
-// Encode returns a msgpack-encoded byte buffer for a given object
-func Encode(obj interface{}) []byte {
+// EncodeReflect returns a msgpack-encoded byte buffer for a given object,
+// using reflection.
+func EncodeReflect(obj interface{}) []byte {
 	codecBytes := codecBytesPool.Get().(*codecBytes)
 	codecBytes.buf = make([]byte, initEncodeBufSize)
 	codecBytes.enc.ResetBytes(&codecBytes.buf)
@@ -94,23 +111,22 @@ func Encode(obj interface{}) []byte {
 	return res
 }
 
-// CountingWriter is an implementation of io.Writer that tracks the number
-// of bytes written (but discards the actual bytes).
-type CountingWriter struct {
-	N int
+// EncodeMsgp returns a msgpack-encoded byte buffer, requiring
+// that we pre-generated the code for doing so using msgp.
+func EncodeMsgp(obj msgp.Marshaler) []byte {
+	return obj.MarshalMsg(nil)
 }
 
-func (cw *CountingWriter) Write(b []byte) (int, error) {
-	blen := len(b)
-	cw.N += blen
-	return blen, nil
-}
+// Encode returns a msgpack-encoded byte buffer for a given object.
+func Encode(obj msgp.Marshaler) []byte {
+	if obj.CanMarshalMsg(obj) {
+		return EncodeMsgp(obj)
+	}
 
-// EncodeLen returns len(Encode(obj))
-func EncodeLen(obj interface{}) int {
-	var cw CountingWriter
-	EncodeStream(&cw, obj)
-	return cw.N
+	// Use fmt instead of logging to avoid import loops;
+	// the expectation is that this should never happen.
+	fmt.Fprintf(os.Stderr, "Encoding %T using go-codec; stray embedded field?\n", obj)
+	return EncodeReflect(obj)
 }
 
 // EncodeStream is like Encode but writes to an io.Writer instead.
@@ -132,11 +148,60 @@ func EncodeJSON(obj interface{}) []byte {
 	return b
 }
 
-// Decode attempts to decode a msgpack-encoded byte buffer into an
-// object instance pointed to by objptr
-func Decode(b []byte, objptr interface{}) error {
+// EncodeJSONStrict returns a JSON-encoded byte buffer for a given object
+// It is the same EncodeJSON but encodes map's int keys as strings
+func EncodeJSONStrict(obj interface{}) []byte {
+	var b []byte
+	enc := codec.NewEncoderBytes(&b, JSONStrictHandle)
+	enc.MustEncode(obj)
+	return b
+}
+
+// DecodeReflect attempts to decode a msgpack-encoded byte buffer
+// into an object instance pointed to by objptr, using reflection.
+func DecodeReflect(b []byte, objptr interface{}) error {
 	dec := codec.NewDecoderBytes(b, CodecHandle)
 	return dec.Decode(objptr)
+}
+
+// DecodeMsgp attempts to decode a msgpack-encoded byte buffer into
+// an object instance pointed to by objptr, requiring that we pre-
+// generated the code for doing so using msgp.
+func DecodeMsgp(b []byte, objptr msgp.Unmarshaler) (err error) {
+	defer func() {
+		if x := recover(); x != nil {
+			err = fmt.Errorf("DecodeMsgp: %v", x)
+		}
+	}()
+
+	var rem []byte
+	rem, err = objptr.UnmarshalMsg(b)
+	if err != nil {
+		return err
+	}
+
+	// go-codec compat: allow remaining bytes, because go-codec allows it too
+	if false {
+		if len(rem) != 0 {
+			return fmt.Errorf("decoding left %d remaining bytes", len(rem))
+		}
+	}
+
+	return nil
+}
+
+// Decode attempts to decode a msgpack-encoded byte buffer
+// into an object instance pointed to by objptr.
+func Decode(b []byte, objptr msgp.Unmarshaler) error {
+	if objptr.CanUnmarshalMsg(objptr) {
+		return DecodeMsgp(b, objptr)
+	}
+
+	// Use fmt instead of logging to avoid import loops;
+	// the expectation is that this should never happen.
+	fmt.Fprintf(os.Stderr, "Decoding %T using go-codec; stray embedded field?\n", objptr)
+
+	return DecodeReflect(b, objptr)
 }
 
 // DecodeStream is like Decode but reads from an io.Reader instead.
@@ -157,6 +222,11 @@ func NewEncoder(w io.Writer) *codec.Encoder {
 	return codec.NewEncoder(w, CodecHandle)
 }
 
+// NewJSONEncoder returns an encoder object writing bytes into [w].
+func NewJSONEncoder(w io.Writer) *codec.Encoder {
+	return codec.NewEncoder(w, JSONHandle)
+}
+
 // NewDecoder returns a decoder object reading bytes from [r].
 func NewDecoder(r io.Reader) Decoder {
 	return codec.NewDecoder(r, CodecHandle)
@@ -170,4 +240,26 @@ func NewJSONDecoder(r io.Reader) Decoder {
 // NewDecoderBytes returns a decoder object reading bytes from [b].
 func NewDecoderBytes(b []byte) Decoder {
 	return codec.NewDecoderBytes(b, CodecHandle)
+}
+
+// encodingPool holds temporary byte slice buffers used for encoding messages.
+var encodingPool = sync.Pool{
+	New: func() interface{} {
+		return []byte{}
+	},
+}
+
+// GetEncodingBuf returns a byte slice that can be used for encoding a
+// temporary message.  The byte slice has zero length but potentially
+// non-zero capacity.  The caller gets full ownership of the byte slice,
+// but is encouraged to return it using PutEncodingBuf().
+func GetEncodingBuf() []byte {
+	return encodingPool.Get().([]byte)[:0]
+}
+
+// PutEncodingBuf places a byte slice into the pool of temporary buffers
+// for encoding.  The caller gives up ownership of the byte slice when
+// passing it to PutEncodingBuf().
+func PutEncodingBuf(s []byte) {
+	encodingPool.Put(s)
 }

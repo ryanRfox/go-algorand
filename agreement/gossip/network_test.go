@@ -1,4 +1,4 @@
-// Copyright (C) 2019 Algorand, Inc.
+// Copyright (C) 2019-2021 Algorand, Inc.
 // This file is part of go-algorand
 //
 // go-algorand is free software: you can redistribute it and/or modify
@@ -18,6 +18,7 @@ package gossip
 
 import (
 	"context"
+	"net"
 	"net/http"
 	"sync"
 	"sync/atomic"
@@ -28,6 +29,7 @@ import (
 
 	"github.com/algorand/go-deadlock"
 
+	"github.com/algorand/go-algorand/logging"
 	"github.com/algorand/go-algorand/network"
 	"github.com/algorand/go-algorand/protocol"
 )
@@ -44,6 +46,7 @@ type whiteholeDomain struct {
 	messagesMu   deadlock.Mutex
 	messagesCond *sync.Cond
 	peerIdx      uint32
+	log          logging.Logger
 }
 
 type whiteholeNetwork struct {
@@ -54,6 +57,7 @@ type whiteholeNetwork struct {
 	quit         chan struct{}
 	domain       *whiteholeDomain
 	disconnected map[uint32]bool
+	log          logging.Logger
 }
 
 func (d *whiteholeDomain) syncNetwork(networks ...*whiteholeNetwork) {
@@ -88,7 +92,7 @@ func (w *whiteholeNetwork) RegisterHandlers(dispatch []network.TaggedMessageHand
 
 // ClearHandlers deregisters all the existing message handlers.
 func (w *whiteholeNetwork) ClearHandlers() {
-	w.mux.ClearHandlers()
+	w.mux.ClearHandlers([]network.Tag{})
 }
 
 func (w *whiteholeNetwork) Address() (string, bool) {
@@ -149,6 +153,9 @@ func (w *whiteholeNetwork) GetPeers(options ...network.PeerOption) []network.Pee
 	return nil
 }
 func (w *whiteholeNetwork) RegisterHTTPHandler(path string, handler http.Handler) {
+}
+func (w *whiteholeNetwork) GetHTTPRequestConnection(request *http.Request) (conn net.Conn) {
+	return nil
 }
 
 func (w *whiteholeNetwork) Start() {
@@ -314,7 +321,7 @@ func makewhiteholeNetwork(domain *whiteholeDomain) *whiteholeNetwork {
 	w := &whiteholeNetwork{
 		peer:         atomic.AddUint32(&domain.peerIdx, 1),
 		lastMsgRead:  uint32(len(domain.messages)),
-		mux:          network.MakeMultiplexer(),
+		mux:          network.MakeMultiplexer(domain.log),
 		domain:       domain,
 		disconnected: make(map[uint32]bool),
 	}
@@ -323,9 +330,10 @@ func makewhiteholeNetwork(domain *whiteholeDomain) *whiteholeNetwork {
 
 func spinNetworkImpl(domain *whiteholeDomain) (whiteholeNet *whiteholeNetwork, counter *messageCounter) {
 	whiteholeNet = makewhiteholeNetwork(domain)
-	netImpl := WrapNetwork(whiteholeNet).(*networkImpl)
+	netImpl := WrapNetwork(whiteholeNet, logging.Base()).(*networkImpl)
 	counter = startMessageCounter(netImpl)
 	whiteholeNet.Start()
+	netImpl.Start()
 	return
 }
 
@@ -335,6 +343,7 @@ func TestNetworkImpl(t *testing.T) {
 	domain := &whiteholeDomain{
 		messages: make([]sentMessage, 0),
 		peerIdx:  uint32(0),
+		log:      logging.TestingLog(t),
 	}
 	domain.messagesCond = sync.NewCond(&domain.messagesMu)
 

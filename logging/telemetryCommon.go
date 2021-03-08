@@ -1,4 +1,4 @@
-// Copyright (C) 2019 Algorand, Inc.
+// Copyright (C) 2019-2021 Algorand, Inc.
 // This file is part of go-algorand
 //
 // go-algorand is free software: you can redistribute it and/or modify
@@ -35,24 +35,46 @@ type TelemetryOperation struct {
 	pending        int32
 }
 
+type telemetryHook interface {
+	Fire(entry *logrus.Entry) error
+	Levels() []logrus.Level
+	Close()
+	Flush()
+	UpdateHookURI(uri string) (err error)
+
+	appendEntry(entry *logrus.Entry) bool
+	waitForEventAndReady() bool
+}
+
 type telemetryState struct {
-	history *logBuffer
-	hook    *asyncTelemetryHook
+	history         *logBuffer
+	hook            telemetryHook
+	telemetryConfig TelemetryConfig
 }
 
 // TelemetryConfig represents the configuration of Telemetry logging
 type TelemetryConfig struct {
 	Enable             bool
+	SendToLog          bool
 	URI                string
 	Name               string
 	GUID               string
-	MinLogLevel        logrus.Level
-	ReportHistoryLevel logrus.Level
-	FilePath           string // Path to file on disk, if any
-	ChainID            string `json:"-"`
-	SessionGUID        string `json:"-"`
+	MinLogLevel        logrus.Level `json:"-"` // these are the logrus.Level, but we can't use it directly since on logrus version 1.4.2 they added
+	ReportHistoryLevel logrus.Level `json:"-"` // text marshalers which breaks our backward compatibility.
+	FilePath           string       // Path to file on disk, if any
+	ChainID            string       `json:"-"`
+	SessionGUID        string       `json:"-"`
 	UserName           string
 	Password           string
+}
+
+// MarshalingTelemetryConfig is used for json serialization of the TelemetryConfig
+// so that we could replace the MinLogLevel/ReportHistoryLevel with our own types.
+type MarshalingTelemetryConfig struct {
+	TelemetryConfig
+
+	MinLogLevel        uint32
+	ReportHistoryLevel uint32
 }
 
 type asyncTelemetryHook struct {
@@ -67,5 +89,8 @@ type asyncTelemetryHook struct {
 	ready         bool
 	urlUpdate     chan bool
 }
+
+// A dummy noop type to get rid of checks like telemetry.hook != nil
+type dummyHook struct{}
 
 type hookFactory func(cfg TelemetryConfig) (logrus.Hook, error)

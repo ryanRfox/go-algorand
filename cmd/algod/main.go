@@ -1,4 +1,4 @@
-// Copyright (C) 2019 Algorand, Inc.
+// Copyright (C) 2019-2021 Algorand, Inc.
 // This file is part of go-algorand
 //
 // go-algorand is free software: you can redistribute it and/or modify
@@ -36,8 +36,9 @@ import (
 	"github.com/algorand/go-algorand/data/bookkeeping"
 	"github.com/algorand/go-algorand/logging"
 	"github.com/algorand/go-algorand/logging/telemetryspec"
+	"github.com/algorand/go-algorand/network"
 	"github.com/algorand/go-algorand/protocol"
-	"github.com/algorand/go-algorand/tools/network"
+	toolsnet "github.com/algorand/go-algorand/tools/network"
 	"github.com/algorand/go-algorand/util/metrics"
 	"github.com/algorand/go-algorand/util/tokens"
 )
@@ -153,19 +154,40 @@ func main() {
 	}
 	defer fileLock.Unlock()
 
+	cfg, err := config.LoadConfigFromDisk(absolutePath)
+	if err != nil && !os.IsNotExist(err) {
+		// log is not setup yet, this will log to stderr
+		log.Fatalf("Cannot load config: %v", err)
+	}
+
+	err = config.LoadConfigurableConsensusProtocols(absolutePath)
+	if err != nil {
+		// log is not setup yet, this will log to stderr
+		log.Fatalf("Unable to load optional consensus protocols file: %v", err)
+	}
+
 	// Enable telemetry hook in daemon to send logs to cloud
 	// If ALGOTEST env variable is set, telemetry is disabled - allows disabling telemetry for tests
 	isTest := os.Getenv("ALGOTEST") != ""
+	remoteTelemetryEnabled := false
 	if !isTest {
 		telemetryConfig, err := logging.EnsureTelemetryConfig(&dataDir, genesis.ID())
 		if err != nil {
 			fmt.Fprintln(os.Stdout, "error loading telemetry config", err)
 		}
+		if os.IsPermission(err) {
+			fmt.Fprintf(os.Stderr, "Permission error on accessing telemetry config: %v", err)
+			os.Exit(1)
+		}
+		fmt.Fprintf(os.Stdout, "Telemetry configured from '%s'\n", telemetryConfig.FilePath)
+
+		telemetryConfig.SendToLog = telemetryConfig.SendToLog || cfg.TelemetryToLog
 
 		// Apply telemetry override.
-		telemetryConfig.Enable = logging.TelemetryOverride(*telemetryOverride)
+		telemetryConfig.Enable = logging.TelemetryOverride(*telemetryOverride, &telemetryConfig)
+		remoteTelemetryEnabled = telemetryConfig.Enable
 
-		if telemetryConfig.Enable {
+		if telemetryConfig.Enable || telemetryConfig.SendToLog {
 			// If session GUID specified, use it.
 			if *sessionGUID != "" {
 				if len(*sessionGUID) == 36 {
@@ -184,12 +206,6 @@ func main() {
 		Genesis:  genesis,
 	}
 
-	cfg, err := config.LoadConfigFromDisk(s.RootPath)
-	if err != nil && !os.IsNotExist(err) {
-		// log is not setup yet, this will log to stderr
-		log.Fatalf("Cannot load config: %v", err)
-	}
-
 	// Generate a REST API token if one was not provided
 	apiToken, wroteNewToken, err := tokens.ValidateOrGenerateAPIToken(s.RootPath, tokens.AlgodTokenFilename)
 
@@ -199,6 +215,17 @@ func main() {
 
 	if wroteNewToken {
 		fmt.Printf("No REST API Token found. Generated token: %s\n", apiToken)
+	}
+
+	// Generate a admin REST API token if one was not provided
+	adminAPIToken, wroteNewToken, err := tokens.ValidateOrGenerateAPIToken(s.RootPath, tokens.AlgodAdminTokenFilename)
+
+	if err != nil {
+		log.Fatalf("Admin API token error: %v", err)
+	}
+
+	if wroteNewToken {
+		fmt.Printf("No Admin REST API Token found. Generated token: %s\n", adminAPIToken)
 	}
 
 	// Allow overriding default listening address
@@ -223,6 +250,17 @@ func main() {
 		if cfg.GossipFanout > len(peerOverrideArray) {
 			cfg.GossipFanout = len(peerOverrideArray)
 		}
+
+		// make sure that the format of each entry is valid:
+		for idx, peer := range peerOverrideArray {
+			url, err := network.ParseHostOrURL(peer)
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "Provided command line parameter '%s' is not a valid host:port pair\n", peer)
+				os.Exit(1)
+				return
+			}
+			peerOverrideArray[idx] = url.Host
+		}
 	}
 
 	// Apply the default deadlock setting before starting the server.
@@ -235,19 +273,32 @@ func main() {
 		log.Fatalf("DefaultDeadlock is somehow not set to an expected value (enable / disable): %s", config.DefaultDeadlock)
 	}
 
-	err = s.Initialize(cfg)
+	var phonebookAddresses []string
+	if peerOverrideArray != nil {
+		phonebookAddresses = peerOverrideArray
+	} else {
+		ex, err := os.Executable()
+		if err != nil {
+			log.Errorf("cannot locate node executable: %s", err)
+		} else {
+			phonebookDir := filepath.Dir(ex)
+			phonebookAddresses, err = config.LoadPhonebook(phonebookDir)
+			if err != nil {
+				log.Debugf("Cannot load static phonebook: %v", err)
+			}
+		}
+	}
+
+	err = s.Initialize(cfg, phonebookAddresses, string(genesisText))
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		log.Error(err)
+		os.Exit(1)
 		return
 	}
 
 	if *initAndExit {
 		return
-	}
-
-	if peerOverrideArray != nil {
-		s.OverridePhonebook(peerOverrideArray...)
 	}
 
 	deadlockState := "enabled"
@@ -265,8 +316,8 @@ func main() {
 		cfgCopy.DNSBootstrapID = telemetryDNSBootstrapID
 
 		// If the telemetry URI is not set, periodically check SRV records for new telemetry URI
-		if log.GetTelemetryURI() == "" {
-			network.StartTelemetryURIUpdateService(time.Minute, cfg, s.Genesis.Network, log, done)
+		if remoteTelemetryEnabled && log.GetTelemetryURI() == "" {
+			toolsnet.StartTelemetryURIUpdateService(time.Minute, cfg, s.Genesis.Network, log, done)
 		}
 
 		currentVersion := config.GetCurrentVersion()

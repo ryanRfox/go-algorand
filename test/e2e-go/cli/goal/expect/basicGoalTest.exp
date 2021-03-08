@@ -18,7 +18,10 @@ if { [catch {
     set NETWORK_TEMPLATE "$TEST_DATA_DIR/nettemplates/TwoNodes50Each.json"
 
     # Create network
-    ::AlgorandGoal::StartNetwork $NETWORK_NAME $NETWORK_TEMPLATE $TEST_ALGO_DIR $TEST_ROOT_DIR
+    ::AlgorandGoal::CreateNetwork $NETWORK_NAME $NETWORK_TEMPLATE $TEST_ALGO_DIR $TEST_ROOT_DIR
+
+    # Start network
+    ::AlgorandGoal::StartNetwork $NETWORK_NAME $NETWORK_TEMPLATE $TEST_ROOT_DIR
 
     set PRIMARY_NODE_ADDRESS [ ::AlgorandGoal::GetAlgodNetworkAddress $TEST_PRIMARY_NODE_DIR ]
     puts "Primary Node Address: $PRIMARY_NODE_ADDRESS"
@@ -62,7 +65,7 @@ if { [catch {
     set MIN_BALANCE 100000
     set TRANSFER_AMOUNT  [expr {3 * $MIN_BALANCE}]
     set FEE_AMOUNT 1000
-    set TRANSACTION_ID [::AlgorandGoal::AccountTransfer $PRIMARY_WALLET_NAME "" $PRIMARY_ACCOUNT_ADDRESS $TRANSFER_AMOUNT $ACCOUNT_1_ADDRESS $FEE_AMOUNT $TEST_PRIMARY_NODE_DIR]
+    set TRANSACTION_ID [::AlgorandGoal::AccountTransfer $PRIMARY_WALLET_NAME "" $PRIMARY_ACCOUNT_ADDRESS $TRANSFER_AMOUNT $ACCOUNT_1_ADDRESS $FEE_AMOUNT $TEST_PRIMARY_NODE_DIR ""]
 
     # Print the transaction id
     puts "TRANSACTION_ID 1: $TRANSACTION_ID"
@@ -72,7 +75,7 @@ if { [catch {
 
     # Transfer Algos from account 1 to account 2
     set TRANSFER_AMOUNT_2 $MIN_BALANCE
-    set TRANSACTION_ID [::AlgorandGoal::AccountTransfer $WALLET_1_NAME $WALLET_1_PASSWORD $ACCOUNT_1_ADDRESS $TRANSFER_AMOUNT_2 $ACCOUNT_2_ADDRESS $FEE_AMOUNT $TEST_PRIMARY_NODE_DIR]
+    set TRANSACTION_ID [::AlgorandGoal::AccountTransfer $WALLET_1_NAME $WALLET_1_PASSWORD $ACCOUNT_1_ADDRESS $TRANSFER_AMOUNT_2 $ACCOUNT_2_ADDRESS $FEE_AMOUNT $TEST_PRIMARY_NODE_DIR ""]
 
     # Print the transaction id
     puts "TRANSACTION_ID 2: $TRANSACTION_ID"
@@ -90,10 +93,10 @@ if { [catch {
     #if { $NEW_ACCOUNT_1_BALANCE != $EXPECTED_ACCOUNT_1_AMOUNT } then { ::AlgorandGoal::Abort "Account 1 is not correct, expected $EXPECTED_ACCOUNT_1_AMOUNT, but received $NEW_ACCOUNT_1_BALANCE " }
 
     # Delete an account
-    ::AlgorandGoal::DeleteAccount $WALLET_1_NAME $ACCOUNT_1_ADDRESS
+    ::AlgorandGoal::DeleteAccount $WALLET_1_NAME $WALLET_1_PASSWORD $ACCOUNT_1_ADDRESS $TEST_PRIMARY_NODE_DIR
 
     # Shutdown the network
-    ::AlgorandGoal::StopNetwork $NETWORK_NAME $TEST_ALGO_DIR $TEST_ROOT_DIR
+    ::AlgorandGoal::StopNetwork $NETWORK_NAME $TEST_ROOT_DIR
 
     puts "Basic Goal Test Successful"
 

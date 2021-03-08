@@ -1,4 +1,4 @@
-// Copyright (C) 2019 Algorand, Inc.
+// Copyright (C) 2019-2021 Algorand, Inc.
 // This file is part of go-algorand
 //
 // go-algorand is free software: you can redistribute it and/or modify
@@ -25,6 +25,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/algorand/go-algorand/crypto"
+	"github.com/algorand/go-algorand/data/basics"
 	"github.com/algorand/go-algorand/data/transactions"
 	"github.com/algorand/go-algorand/protocol"
 )
@@ -71,7 +72,10 @@ var signCmd = &cobra.Command{
 			}
 
 			stxn.Sig = key.Sign(stxn.Txn)
-			outBytes = append(outBytes, protocol.Encode(stxn)...)
+			if stxn.Txn.Sender != basics.Address(key.SignatureVerifier) {
+				stxn.AuthAddr = basics.Address(key.SignatureVerifier)
+			}
+			outBytes = append(outBytes, protocol.Encode(&stxn)...)
 		}
 
 		err = ioutil.WriteFile(signOutfile, outBytes, 0600)

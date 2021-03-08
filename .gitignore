@@ -41,6 +41,10 @@ crypto/libsodium-fork/**/Makefile.in
 crypto/libsodium-fork/aclocal.m4
 crypto/libsodium-fork/build-aux/
 
+# Ignore libsodium files generated during ci process
+crypto/copies
+crypto/libs
+
 # Ignore vim backup and swap files
 *~
 *.swp
@@ -51,3 +55,14 @@ crypto/libsodium-fork/build-aux/
 
 # doc intermediates
 data/transactions/logic/*.md
+
+*.pem
+
+# Folder for collecting release assets
+assets
+
+# test binaries
+*.test
+
+index.html
+

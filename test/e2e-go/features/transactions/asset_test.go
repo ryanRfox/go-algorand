@@ -1,4 +1,4 @@
-// Copyright (C) 2019 Algorand, Inc.
+// Copyright (C) 2019-2021 Algorand, Inc.
 // This file is part of go-algorand
 //
 // go-algorand is free software: you can redistribute it and/or modify
@@ -21,12 +21,11 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
-	"runtime"
 
 	"github.com/stretchr/testify/require"
 
 	"github.com/algorand/go-algorand/config"
-	"github.com/algorand/go-algorand/daemon/algod/api/spec/v1"
+	v1 "github.com/algorand/go-algorand/daemon/algod/api/spec/v1"
 	"github.com/algorand/go-algorand/data/basics"
 	"github.com/algorand/go-algorand/data/transactions"
 	"github.com/algorand/go-algorand/libgoal"
@@ -185,6 +184,9 @@ func TestAssetValidRounds(t *testing.T) {
 }
 
 func TestAssetConfig(t *testing.T) {
+	if testing.Short() {
+		t.Skip()
+	}
 	t.Parallel()
 	a := require.New(t)
 
@@ -417,9 +419,6 @@ func TestAssetConfig(t *testing.T) {
 }
 
 func TestAssetInformation(t *testing.T) {
-	if runtime.GOOS == "darwin" {
-		t.Skip()
-	}
 	t.Parallel()
 	a := require.New(t)
 
@@ -455,6 +454,12 @@ func TestAssetInformation(t *testing.T) {
 	a.NoError(err)
 	a.Equal(len(info.AssetParams), 0)
 
+	// There should be no assets to start with
+	info2, err := client.AccountInformationV2(account0)
+	a.NoError(err)
+	a.NotNil(info2.CreatedAssets)
+	a.Equal(len(*info2.CreatedAssets), 0)
+
 	// Create some assets
 	txids := make(map[string]string)
 	for i := 0; i < 16; i++ {
@@ -475,6 +480,16 @@ func TestAssetInformation(t *testing.T) {
 		assetInfo, err := client.AssetInformation(idx)
 		a.NoError(err)
 		a.Equal(cp, assetInfo)
+	}
+
+	// Check that AssetInformationV2 returns the correct AssetParams
+	info2, err = client.AccountInformationV2(account0)
+	a.NoError(err)
+	a.NotNil(info2.CreatedAssets)
+	for _, cp := range *info2.CreatedAssets {
+		asset, err := client.AssetInformationV2(cp.Index)
+		a.NoError(err)
+		a.Equal(cp, asset)
 	}
 
 	// Destroy assets
@@ -637,9 +652,6 @@ func TestAssetGroupCreateSendDestroy(t *testing.T) {
 }
 
 func TestAssetSend(t *testing.T) {
-	if runtime.GOOS == "darwin" {
-		t.Skip()
-	}
 	t.Parallel()
 	a := require.New(t)
 
@@ -796,13 +808,13 @@ func TestAssetSend(t *testing.T) {
 	tx, err = client.MakeUnsignedAssetSendTx(nonFrozenIdx, 11, extra, "", "")
 	_, err = helperFillSignBroadcast(client, wh, extra, tx, err)
 	a.Error(err)
-	a.True(strings.Contains(err.Error(), "underflow on subtracting 11 from sender amount"))
+	a.True(strings.Contains(err.Error(), "underflow on subtracting 11 from sender amount 10"))
 
 	// Should not be able to clawback more than is available
 	tx, err = client.MakeUnsignedAssetSendTx(nonFrozenIdx, 11, account0, "", extra)
 	_, err = helperFillSignBroadcast(client, wh, clawback, tx, err)
 	a.Error(err)
-	a.True(strings.Contains(err.Error(), "underflow on subtracting 11 from sender amount"))
+	a.True(strings.Contains(err.Error(), "underflow on subtracting 11 from sender amount 10"))
 
 	tx, err = client.MakeUnsignedAssetSendTx(nonFrozenIdx, 10, extra, "", "")
 	_, err = helperFillSignBroadcast(client, wh, extra, tx, err)
@@ -887,7 +899,7 @@ func TestAssetSend(t *testing.T) {
 }
 
 func TestAssetCreateWaitRestartDelete(t *testing.T) {
-	a, fixture, client, account0 := setupTestAndNetwork(t, "")
+	a, fixture, client, account0 := setupTestAndNetwork(t, "", nil)
 	defer fixture.Shutdown()
 
 	// There should be no assets to start with
@@ -948,7 +960,28 @@ func TestAssetCreateWaitRestartDelete(t *testing.T) {
 }
 
 func TestAssetCreateWaitBalLookbackDelete(t *testing.T) {
-	a, fixture, client, account0 := setupTestAndNetwork(t, "TwoNodes50EachTestShorterLookback.json")
+	if testing.Short() {
+		t.Skip()
+	}
+	configurableConsensus := make(config.ConsensusProtocols)
+
+	consensusVersion := protocol.ConsensusVersion("test-shorter-lookback")
+
+	// Setting the testShorterLookback parameters derived from ConsensusCurrentVersion
+	// Will result in MaxBalLookback = 32
+	// Used to run tests faster where past MaxBalLookback values are checked
+	consensusParams := config.Consensus[protocol.ConsensusCurrentVersion]
+	consensusParams.ApprovedUpgrades = map[protocol.ConsensusVersion]uint64{}
+
+	// MaxBalLookback  =  2 x SeedRefreshInterval x SeedLookback
+	// ref. https://github.com/algorandfoundation/specs/blob/master/dev/abft.md
+	consensusParams.SeedLookback = 2
+	consensusParams.SeedRefreshInterval = 8
+	consensusParams.MaxBalLookback = 2 * consensusParams.SeedLookback * consensusParams.SeedRefreshInterval // 32
+
+	configurableConsensus[consensusVersion] = consensusParams
+
+	a, fixture, client, account0 := setupTestAndNetwork(t, "TwoNodes50EachTestShorterLookback.json", configurableConsensus)
 	defer fixture.Shutdown()
 
 	// There should be no assets to start with
@@ -1012,7 +1045,7 @@ func TestAssetCreateWaitBalLookbackDelete(t *testing.T) {
 /** Helper functions **/
 
 // Setup the test and the network
-func setupTestAndNetwork(t *testing.T, networkTemplate string) (
+func setupTestAndNetwork(t *testing.T, networkTemplate string, consensus config.ConsensusProtocols) (
 	Assertions *require.Assertions, Fixture *fixtures.RestClientFixture, Client *libgoal.Client, Account0 string) {
 
 	t.Parallel()
@@ -1022,6 +1055,9 @@ func setupTestAndNetwork(t *testing.T, networkTemplate string) (
 		networkTemplate = "TwoNodes50Each.json"
 	}
 	var fixture fixtures.RestClientFixture
+	if consensus != nil {
+		fixture.SetConsensus(consensus)
+	}
 	fixture.Setup(t, filepath.Join("nettemplates", networkTemplate))
 	accountList, err := fixture.GetWalletsSortedByBalance()
 	asser.NoError(err)

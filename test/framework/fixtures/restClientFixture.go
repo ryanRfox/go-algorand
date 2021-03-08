@@ -1,4 +1,4 @@
-// Copyright (C) 2019 Algorand, Inc.
+// Copyright (C) 2019-2021 Algorand, Inc.
 // This file is part of go-algorand
 //
 // go-algorand is free software: you can redistribute it and/or modify
@@ -48,7 +48,6 @@ func (f *RestClientFixture) Setup(t TestingT, templateFile string) {
 // but does not start the network before returning.  Call NC.Start() to start later.
 func (f *RestClientFixture) SetupNoStart(t TestingT, templateFile string) {
 	f.LibGoalFixture.SetupNoStart(t, templateFile)
-	f.AlgodClient = f.GetAlgodClientForController(f.NC)
 }
 
 // SetupShared is called to initialize the test fixture that will be used for multiple tests
@@ -61,9 +60,9 @@ func (f *RestClientFixture) SetupShared(testName string, templateFile string) {
 func (f *RestClientFixture) GetAlgodClientForController(nc nodecontrol.NodeController) client.RestClient {
 	url, err := nc.ServerURL()
 	f.failOnError(err, fmt.Sprintf("get ServerURL failed for %s: %%v", nc.GetDataDir()))
-	apiToken, err := tokens.GetAndValidateAPIToken(nc.GetDataDir(), tokens.AlgodTokenFilename)
-	f.failOnError(err, "error validating APIToken for node: %v")
-	return client.MakeRestClient(url, apiToken)
+	adminAPIToken, err := tokens.GetAndValidateAPIToken(nc.GetDataDir(), tokens.AlgodAdminTokenFilename)
+	f.failOnError(err, "error validating AdminAPIToken for node: %v")
+	return client.MakeRestClient(url, adminAPIToken)
 }
 
 // WaitForRound waits up to the specified amount of time for
@@ -198,9 +197,12 @@ func (f *RestClientFixture) GetNodeWalletsSortedByBalance(nodeDataDir string) (a
 func (f *RestClientFixture) getNodeWalletsSortedByBalance(client libgoal.Client) (accounts []v1.Account, err error) {
 	wh, err := client.GetUnencryptedWalletHandle()
 	if err != nil {
-		return
+		return nil, fmt.Errorf("unable to retrieve wallet handle : %v", err)
 	}
 	addresses, err := client.ListAddresses(wh)
+	if err != nil {
+		return nil, fmt.Errorf("unable to list wallet addresses : %v", err)
+	}
 	for _, addr := range addresses {
 		info, err := client.AccountInformation(addr)
 		f.failOnError(err, "failed to get account info: %v")
@@ -209,7 +211,7 @@ func (f *RestClientFixture) getNodeWalletsSortedByBalance(client libgoal.Client)
 	sort.SliceStable(accounts, func(i, j int) bool {
 		return accounts[i].Amount > accounts[j].Amount
 	})
-	return accounts, err
+	return accounts, nil
 }
 
 // WaitForTxnConfirmation waits until either the passed txid is confirmed

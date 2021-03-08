@@ -43,16 +43,26 @@ GOPATH=$(go env GOPATH)
 export GOPATH
 export GO111MODULE=on
 
-echo "Building libsodium-fork..."
-make crypto/lib/libsodium.a
-
 SCRIPTPATH="$( cd "$(dirname "$0")" ; pwd -P )"
 OS=$("${SCRIPTPATH}"/../ostype.sh)
 ARCH=$("${SCRIPTPATH}"/../archtype.sh)
 
+echo "Building libsodium-fork..."
+make crypto/libs/${OS}/${ARCH}/lib/libsodium.a
+
+if [ "${BUILD_TYPE}" = "integration" ]; then
+    echo "Skipping vet/gofmt/golint/license_check on integration test"
+    exit 0
+fi
+
 if [ "${OS}-${ARCH}" = "linux-arm" ]; then
     echo "Skipping running 'go vet'/gofmt/golint for arm builds"
     exit 0
+fi
+
+if [ "${OS}-${ARCH}" = "windows-amd64" ]; then
+     echo "Skipping running 'go vet'/gofmt/golint for windows builds"
+     exit 0
 fi
 
 echo "Running go vet..."

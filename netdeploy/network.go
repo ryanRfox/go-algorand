@@ -1,4 +1,4 @@
-// Copyright (C) 2019 Algorand, Inc.
+// Copyright (C) 2019-2021 Algorand, Inc.
 // This file is part of go-algorand
 //
 // go-algorand is free software: you can redistribute it and/or modify
@@ -25,8 +25,9 @@ import (
 	"strings"
 	"time"
 
+	generatedV2 "github.com/algorand/go-algorand/daemon/algod/api/server/v2/generated"
+
 	"github.com/algorand/go-algorand/config"
-	"github.com/algorand/go-algorand/daemon/algod/api/spec/v1"
 	"github.com/algorand/go-algorand/gen"
 	"github.com/algorand/go-algorand/libgoal"
 	"github.com/algorand/go-algorand/nodecontrol"
@@ -48,10 +49,85 @@ type NetworkCfg struct {
 
 // Network represents an instance of a deployed network
 type Network struct {
-	rootDir  string
-	cfg      NetworkCfg
-	nodeDirs map[string]string // mapping between the node name and the directories where the node is operation on (not including RelayDirs)
-	gen      gen.GenesisData
+	rootDir          string
+	cfg              NetworkCfg
+	nodeDirs         map[string]string // mapping between the node name and the directories where the node is operation on (not including RelayDirs)
+	gen              gen.GenesisData
+	nodeExitCallback nodecontrol.AlgodExitErrorCallback
+}
+
+// CreateNetworkFromTemplate uses the specified template to deploy a new private network
+// under the specified root directory.
+func CreateNetworkFromTemplate(name, rootDir, templateFile, binDir string, importKeys bool, nodeExitCallback nodecontrol.AlgodExitErrorCallback, consensus config.ConsensusProtocols) (Network, error) {
+	n := Network{
+		rootDir:          rootDir,
+		nodeExitCallback: nodeExitCallback,
+	}
+	n.cfg.Name = name
+	n.cfg.TemplateFile = templateFile
+
+	template, err := loadTemplate(templateFile)
+	if err == nil {
+		err = template.Validate()
+	}
+	if err != nil {
+		return n, err
+	}
+
+	// Create the network root directory so we can generate genesis.json and prepare node data directories
+	err = os.MkdirAll(rootDir, os.ModePerm)
+	if err != nil {
+		return n, err
+	}
+	template.Consensus = consensus
+	err = template.generateGenesisAndWallets(rootDir, name, binDir)
+	if err != nil {
+		return n, err
+	}
+
+	n.cfg.RelayDirs, n.nodeDirs, n.gen, err = template.createNodeDirectories(rootDir, binDir, importKeys)
+	if err != nil {
+		return n, err
+	}
+
+	err = n.Save(rootDir)
+	n.SetConsensus(binDir, consensus)
+	return n, err
+}
+
+// LoadNetwork loads and initializes the Network state representing
+// an existing deployed network.
+func LoadNetwork(rootDir string) (Network, error) {
+	n := Network{
+		rootDir: rootDir,
+	}
+
+	if !isValidNetworkDir(rootDir) {
+		return n, fmt.Errorf("does not appear to be a valid network root directory: %s", rootDir)
+	}
+
+	cfgFile := filepath.Join(rootDir, configFileName)
+
+	var err error
+	n.cfg, err = loadNetworkCfg(cfgFile)
+	if err != nil {
+		return n, err
+	}
+
+	err = n.scanForNodes()
+	return n, err
+}
+
+func loadNetworkCfg(configFile string) (NetworkCfg, error) {
+	cfg := NetworkCfg{}
+	f, err := os.Open(configFile)
+	if err != nil {
+		return cfg, err
+	}
+	defer f.Close()
+	dec := json.NewDecoder(f)
+	err = dec.Decode(&cfg)
+	return cfg, err
 }
 
 // Name returns the name of the private network
@@ -96,43 +172,6 @@ func (n Network) Genesis() gen.GenesisData {
 	return n.gen
 }
 
-// CreateNetworkFromTemplate uses the specified template to deploy a new private network
-// under the specified root directory.
-func CreateNetworkFromTemplate(name, rootDir, templateFile, binDir string, importKeys bool) (Network, error) {
-	n := Network{
-		rootDir: rootDir,
-	}
-	n.cfg.Name = name
-	n.cfg.TemplateFile = templateFile
-
-	template, err := loadTemplate(templateFile)
-	if err == nil {
-		err = template.Validate()
-	}
-	if err != nil {
-		return n, err
-	}
-
-	// Create the network root directory so we can generate genesis.json and prepare node data directories
-	err = os.MkdirAll(rootDir, os.ModePerm)
-	if err != nil {
-		return n, err
-	}
-
-	err = template.generateGenesisAndWallets(rootDir, name, binDir)
-	if err != nil {
-		return n, err
-	}
-
-	n.cfg.RelayDirs, n.nodeDirs, n.gen, err = template.createNodeDirectories(rootDir, binDir, importKeys)
-	if err != nil {
-		return n, err
-	}
-
-	err = n.Save(rootDir)
-	return n, err
-}
-
 func isValidNetworkDir(rootDir string) bool {
 	cfgFile := filepath.Join(rootDir, configFileName)
 	fileExists := util.FileExists(cfgFile)
@@ -146,41 +185,6 @@ func isValidNetworkDir(rootDir string) bool {
 	cfgFile = filepath.Join(rootDir, genesisFileName)
 	fileExists = util.FileExists(cfgFile)
 	return fileExists
-}
-
-// LoadNetwork loads and initializes the Network state representing
-// an existing deployed network.
-func LoadNetwork(rootDir string) (Network, error) {
-	n := Network{
-		rootDir: rootDir,
-	}
-
-	if !isValidNetworkDir(rootDir) {
-		return n, fmt.Errorf("does not appear to be a valid network root directory: %s", rootDir)
-	}
-
-	cfgFile := filepath.Join(rootDir, configFileName)
-
-	var err error
-	n.cfg, err = loadNetworkCfg(cfgFile)
-	if err != nil {
-		return n, err
-	}
-
-	err = n.scanForNodes()
-	return n, err
-}
-
-func loadNetworkCfg(configFile string) (NetworkCfg, error) {
-	cfg := NetworkCfg{}
-	f, err := os.Open(configFile)
-	if err != nil {
-		return cfg, err
-	}
-	defer f.Close()
-	dec := json.NewDecoder(f)
-	err = dec.Decode(&cfg)
-	return cfg, err
 }
 
 // Save persists the network state in the root directory (in network.json)
@@ -248,11 +252,15 @@ func (n Network) Start(binDir string, redirectOutput bool) error {
 	// Start Prime Relay and get its listening address
 
 	var peerAddressListBuilder strings.Builder
-
+	var relayAddress string
+	var err error
 	for _, relayDir := range n.cfg.RelayDirs {
-		nc := nodecontrol.MakeNodeController(binDir, n.getNodeFullPath(relayDir))
+		nodeFulllPath := n.getNodeFullPath(relayDir)
+		nc := nodecontrol.MakeNodeController(binDir, nodeFulllPath)
 		args := nodecontrol.AlgodStartArgs{
-			RedirectOutput: redirectOutput,
+			RedirectOutput:    redirectOutput,
+			ExitErrorCallback: n.nodeExitCallback,
+			PeerAddress:       relayAddress, // on the first iteration it would be empty, which is ok. subsequent iterations would link all the relays.
 		}
 
 		_, err := nc.StartAlgod(args)
@@ -260,7 +268,7 @@ func (n Network) Start(binDir string, redirectOutput bool) error {
 			return err
 		}
 
-		relayAddress, err := n.getRelayAddress(nc)
+		relayAddress, err = n.getRelayAddress(nc)
 		if err != nil {
 			return err
 		}
@@ -272,7 +280,7 @@ func (n Network) Start(binDir string, redirectOutput bool) error {
 	}
 
 	peerAddressList := peerAddressListBuilder.String()
-	err := n.startNodes(binDir, peerAddressList, redirectOutput)
+	err = n.startNodes(binDir, peerAddressList, redirectOutput)
 	return err
 }
 
@@ -299,17 +307,22 @@ func (n Network) GetPeerAddresses(binDir string) []string {
 	for _, relayDir := range n.cfg.RelayDirs {
 		nc := nodecontrol.MakeNodeController(binDir, n.getNodeFullPath(relayDir))
 		relayAddress, err := nc.GetListeningAddress()
-		if err == nil {
-			peerAddresses = append(peerAddresses, relayAddress)
+		if err != nil {
+			continue
 		}
+		if strings.HasPrefix(relayAddress, "http://") {
+			relayAddress = relayAddress[7:]
+		}
+		peerAddresses = append(peerAddresses, relayAddress)
 	}
 	return peerAddresses
 }
 
 func (n Network) startNodes(binDir, relayAddress string, redirectOutput bool) error {
 	args := nodecontrol.AlgodStartArgs{
-		PeerAddress:    relayAddress,
-		RedirectOutput: redirectOutput,
+		PeerAddress:       relayAddress,
+		RedirectOutput:    redirectOutput,
+		ExitErrorCallback: n.nodeExitCallback,
 	}
 	for _, nodeDir := range n.nodeDirs {
 		nc := nodecontrol.MakeNodeController(binDir, n.getNodeFullPath(nodeDir))
@@ -327,7 +340,6 @@ func (n Network) StartNode(binDir, nodeDir string, redirectOutput bool) (err err
 	controller := nodecontrol.MakeNodeController(binDir, nodeDir)
 	peers := n.GetPeerAddresses(binDir)
 	peerAddresses := strings.Join(peers, ";")
-
 	_, err = controller.StartAlgod(nodecontrol.AlgodStartArgs{
 		PeerAddress:    peerAddresses,
 		RedirectOutput: redirectOutput,
@@ -339,19 +351,25 @@ func (n Network) StartNode(binDir, nodeDir string, redirectOutput bool) (err err
 // No return code - we try to kill them if we can (if we read valid PID file)
 func (n Network) Stop(binDir string) {
 	c := make(chan struct{}, len(n.cfg.RelayDirs)+len(n.nodeDirs))
-	stopNodeContoller := func(nc nodecontrol.NodeController) {
+	stopNodeContoller := func(nc *nodecontrol.NodeController) {
 		defer func() {
 			c <- struct{}{}
 		}()
 		nc.FullStop()
 	}
 	for _, relayDir := range n.cfg.RelayDirs {
-		nc := nodecontrol.MakeNodeController(binDir, n.getNodeFullPath(relayDir))
-		go stopNodeContoller(nc)
+		relayDataDir := n.getNodeFullPath(relayDir)
+		nc := nodecontrol.MakeNodeController(binDir, relayDataDir)
+		algodKmdPath, _ := filepath.Abs(filepath.Join(relayDataDir, libgoal.DefaultKMDDataDir))
+		nc.SetKMDDataDir(algodKmdPath)
+		go stopNodeContoller(&nc)
 	}
 	for _, nodeDir := range n.nodeDirs {
-		nc := nodecontrol.MakeNodeController(binDir, n.getNodeFullPath(nodeDir))
-		go stopNodeContoller(nc)
+		nodeDataDir := n.getNodeFullPath(nodeDir)
+		nc := nodecontrol.MakeNodeController(binDir, nodeDataDir)
+		algodKmdPath, _ := filepath.Abs(filepath.Join(nodeDataDir, libgoal.DefaultKMDDataDir))
+		nc.SetKMDDataDir(algodKmdPath)
+		go stopNodeContoller(&nc)
 	}
 	// wait until we finish stopping all the node controllers.
 	for i := cap(c); i > 0; i-- {
@@ -362,7 +380,7 @@ func (n Network) Stop(binDir string) {
 
 // NetworkNodeStatus represents the result from checking the status of a particular node instance
 type NetworkNodeStatus struct {
-	Status v1.NodeStatus
+	Status generatedV2.NodeStatusResponse
 	Error  error
 }
 
@@ -390,7 +408,7 @@ func (n Network) NodesStatus(binDir string) map[string]NetworkNodeStatus {
 	statuses := make(map[string]NetworkNodeStatus)
 
 	for _, relayDir := range n.cfg.RelayDirs {
-		var status v1.NodeStatus
+		var status generatedV2.NodeStatusResponse
 		nc := nodecontrol.MakeNodeController(binDir, n.getNodeFullPath(relayDir))
 		algodClient, err := nc.AlgodClient()
 		if err == nil {
@@ -403,7 +421,7 @@ func (n Network) NodesStatus(binDir string) map[string]NetworkNodeStatus {
 	}
 
 	for _, nodeDir := range n.nodeDirs {
-		var status v1.NodeStatus
+		var status generatedV2.NodeStatusResponse
 		nc := nodecontrol.MakeNodeController(binDir, n.getNodeFullPath(nodeDir))
 		algodClient, err := nc.AlgodClient()
 		if err == nil {
@@ -423,4 +441,26 @@ func (n Network) NodesStatus(binDir string) map[string]NetworkNodeStatus {
 func (n Network) Delete(binDir string) error {
 	n.Stop(binDir)
 	return os.RemoveAll(n.rootDir)
+}
+
+// SetConsensus applies a new consensus settings which would get deployed before
+// any of the nodes starts
+func (n Network) SetConsensus(binDir string, consensus config.ConsensusProtocols) error {
+	for _, relayDir := range n.cfg.RelayDirs {
+		relayFulllPath := n.getNodeFullPath(relayDir)
+		nc := nodecontrol.MakeNodeController(binDir, relayFulllPath)
+		err := nc.SetConsensus(consensus)
+		if err != nil {
+			return err
+		}
+	}
+	for _, nodeDir := range n.nodeDirs {
+		nodeFulllPath := n.getNodeFullPath(nodeDir)
+		nc := nodecontrol.MakeNodeController(binDir, nodeFulllPath)
+		err := nc.SetConsensus(consensus)
+		if err != nil {
+			return err
+		}
+	}
+	return nil
 }

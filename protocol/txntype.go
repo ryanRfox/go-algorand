@@ -1,4 +1,4 @@
-// Copyright (C) 2019 Algorand, Inc.
+// Copyright (C) 2019-2021 Algorand, Inc.
 // This file is part of go-algorand
 //
 // go-algorand is free software: you can redistribute it and/or modify
@@ -37,6 +37,12 @@ const (
 
 	// AssetFreezeTx changes the freeze status of an asset
 	AssetFreezeTx TxType = "afrz"
+
+	// ApplicationCallTx allows creating, deleting, and interacting with an application
+	ApplicationCallTx TxType = "appl"
+
+	// CompactCertTx records a compact certificate
+	CompactCertTx TxType = "cert"
 
 	// UnknownTx signals an error
 	UnknownTx TxType = "unknown"

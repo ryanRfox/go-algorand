@@ -1,4 +1,4 @@
-// Copyright (C) 2019 Algorand, Inc.
+// Copyright (C) 2019-2021 Algorand, Inc.
 // This file is part of go-algorand
 //
 // go-algorand is free software: you can redistribute it and/or modify
@@ -66,23 +66,34 @@ type demux struct {
 	log logging.Logger
 }
 
+// demuxParams contains the parameters required to initliaze a new demux object
+type demuxParams struct {
+	net               Network
+	ledger            LedgerReader
+	validator         BlockValidator
+	voteVerifier      *AsyncVoteVerifier
+	processingMonitor EventsProcessingMonitor
+	log               logging.Logger
+	monitor           *coserviceMonitor
+}
+
 // makeDemux initializes the goroutines needed to process external events, setting up the appropriate channels.
 //
 // It must be called before other methods are called.
-func makeDemux(net Network, ledger LedgerReader, validator BlockValidator, voteVerifier *AsyncVoteVerifier, processingMonitor EventsProcessingMonitor, log logging.Logger) (d *demux) {
+func makeDemux(params demuxParams) (d *demux) {
 	d = new(demux)
-	d.crypto = makeCryptoVerifier(ledger, validator, voteVerifier, log)
-	d.log = log
-	d.ledger = ledger
+	d.crypto = makeCryptoVerifier(params.ledger, params.validator, params.voteVerifier, params.log)
+	d.log = params.log
+	d.ledger = params.ledger
+	d.monitor = params.monitor
+	d.queue = make([]<-chan externalEvent, 0)
+	d.processingMonitor = params.processingMonitor
 
 	tokenizerCtx, cancelTokenizers := context.WithCancel(context.Background())
-	d.rawVotes = d.tokenizeMessages(tokenizerCtx, net, protocol.AgreementVoteTag, decodeVote)
-	d.rawProposals = d.tokenizeMessages(tokenizerCtx, net, protocol.ProposalPayloadTag, decodeProposal)
-	d.rawBundles = d.tokenizeMessages(tokenizerCtx, net, protocol.VoteBundleTag, decodeBundle)
+	d.rawVotes = d.tokenizeMessages(tokenizerCtx, params.net, protocol.AgreementVoteTag, decodeVote)
+	d.rawProposals = d.tokenizeMessages(tokenizerCtx, params.net, protocol.ProposalPayloadTag, decodeProposal)
+	d.rawBundles = d.tokenizeMessages(tokenizerCtx, params.net, protocol.VoteBundleTag, decodeBundle)
 	d.cancelTokenizers = cancelTokenizers
-
-	d.queue = make([]<-chan externalEvent, 0)
-	d.processingMonitor = processingMonitor
 
 	return d
 }
@@ -158,14 +169,14 @@ func (d *demux) verifyVote(ctx context.Context, m message, taskIndex int, r roun
 func (d *demux) verifyPayload(ctx context.Context, m message, r round, p period, pinned bool) {
 	d.UpdateEventsQueue(eventQueueCryptoVerifierProposal, 1)
 	d.monitor.inc(cryptoVerifierCoserviceType)
-	d.crypto.Verify(ctx, cryptoRequest{message: m, Round: r, Period: p, Pinned: pinned})
+	d.crypto.VerifyProposal(ctx, cryptoProposalRequest{message: m, Round: r, Period: p, Pinned: pinned})
 }
 
 // verifyBundle enqueues a bundle message to be verified.
-func (d *demux) verifyBundle(ctx context.Context, m message, r round, p period) {
+func (d *demux) verifyBundle(ctx context.Context, m message, r round, p period, s step) {
 	d.UpdateEventsQueue(eventQueueCryptoVerifierBundle, 1)
 	d.monitor.inc(cryptoVerifierCoserviceType)
-	d.crypto.Verify(ctx, cryptoRequest{message: m, Round: r, Period: p})
+	d.crypto.VerifyBundle(ctx, cryptoBundleRequest{message: m, Round: r, Period: p, Certify: s == cert})
 }
 
 // next blocks until it observes an external input event of interest for the state machine.
@@ -232,7 +243,7 @@ func (d *demux) next(s *Service, deadline time.Duration, fastDeadline time.Durat
 		fastDeadlineCh = s.Clock.TimeoutAt(fastDeadline)
 	}
 	if err != nil {
-		logging.Base().Errorf("could not get consensus parameters for round %v: %v", ParamsRound(currentRound), err)
+		logging.Base().Errorf("could not get consensus parameters for round %d: %v", ParamsRound(currentRound), err)
 	}
 
 	d.UpdateEventsQueue(eventQueueDemux, 0)
@@ -271,7 +282,7 @@ func (d *demux) next(s *Service, deadline time.Duration, fastDeadline time.Durat
 			Round: uint64(previousRound),
 		}
 
-		s.log.with(logEvent).Infof("agreement: round %v ended early due to concurrent write; next round is %v", previousRound, nextRound)
+		s.log.with(logEvent).Infof("agreement: round %d ended early due to concurrent write; next round is %d", previousRound, nextRound)
 		e = roundInterruptionEvent{Round: nextRound}
 		d.UpdateEventsQueue(eventQueueDemux, 1)
 		d.monitor.inc(demuxCoserviceType)

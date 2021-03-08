@@ -1,4 +1,4 @@
-// Copyright (C) 2019 Algorand, Inc.
+// Copyright (C) 2019-2021 Algorand, Inc.
 // This file is part of go-algorand
 //
 // go-algorand is free software: you can redistribute it and/or modify
@@ -31,6 +31,7 @@ import (
 	"github.com/algorand/go-algorand/config"
 	"github.com/algorand/go-algorand/crypto"
 	"github.com/algorand/go-algorand/crypto/passphrase"
+	"github.com/algorand/go-algorand/daemon/algod/api/spec/v1"
 	algodAcct "github.com/algorand/go-algorand/data/account"
 	"github.com/algorand/go-algorand/data/basics"
 	"github.com/algorand/go-algorand/data/transactions"
@@ -60,6 +61,8 @@ var (
 	partKeyDeleteInput bool
 	importDefault      bool
 	mnemonic           string
+	dumpOutFile        string
+	listAccountInfo    bool
 )
 
 func init() {
@@ -67,6 +70,7 @@ func init() {
 	accountCmd.AddCommand(deleteCmd)
 	accountCmd.AddCommand(listCmd)
 	accountCmd.AddCommand(renameCmd)
+	accountCmd.AddCommand(infoCmd)
 	accountCmd.AddCommand(balanceCmd)
 	accountCmd.AddCommand(rewardsCmd)
 	accountCmd.AddCommand(changeOnlineCmd)
@@ -87,6 +91,8 @@ func init() {
 	accountCmd.AddCommand(renewAllParticipationKeyCmd)
 
 	accountCmd.AddCommand(partkeyInfoCmd)
+
+	accountCmd.AddCommand(dumpCmd)
 
 	// Wallet to be used for the account operation
 	accountCmd.PersistentFlags().StringVarP(&walletName, "wallet", "w", "", "Set the wallet to be used for the selected operation")
@@ -113,6 +119,13 @@ func init() {
 	infoMultisigCmd.Flags().StringVarP(&accountAddress, "address", "a", "", "Address of multisig account to look up")
 	infoMultisigCmd.MarkFlagRequired("address")
 
+	// Account list flags
+	listCmd.Flags().BoolVar(&listAccountInfo, "info", false, "Include additional information about each account's assets and applications")
+
+	// Info flags
+	infoCmd.Flags().StringVarP(&accountAddress, "address", "a", "", "Account address to look up (required)")
+	infoCmd.MarkFlagRequired("address")
+
 	// Balance flags
 	balanceCmd.Flags().StringVarP(&accountAddress, "address", "a", "", "Account address to retrieve balance (required)")
 	balanceCmd.MarkFlagRequired("address")
@@ -125,7 +138,6 @@ func init() {
 	changeOnlineCmd.Flags().StringVarP(&accountAddress, "address", "a", "", "Account address to change (required if no -partkeyfile)")
 	changeOnlineCmd.Flags().StringVarP(&partKeyFile, "partkeyfile", "", "", "Participation key file (required if no -account)")
 	changeOnlineCmd.Flags().BoolVarP(&online, "online", "o", true, "Set this account to online or offline")
-	changeOnlineCmd.MarkFlagRequired("online")
 	changeOnlineCmd.Flags().Uint64VarP(&transactionFee, "fee", "f", 0, "The Fee to set on the status change transaction (defaults to suggested fee)")
 	changeOnlineCmd.Flags().Uint64VarP(&firstValid, "firstRound", "", 0, "")
 	changeOnlineCmd.Flags().Uint64VarP(&firstValid, "firstvalid", "", 0, "FirstValid for the status change transaction (0 for current)")
@@ -191,6 +203,10 @@ func init() {
 	markNonparticipatingCmd.Flags().BoolVarP(&noWaitAfterSend, "no-wait", "N", false, "Don't wait for transaction to commit")
 	markNonparticipatingCmd.Flags().MarkDeprecated("firstRound", "use --firstvalid instead")
 	markNonparticipatingCmd.Flags().MarkDeprecated("validRounds", "use --validrounds instead")
+
+	dumpCmd.Flags().StringVarP(&dumpOutFile, "outfile", "o", "", "Save balance record to specified output file")
+	dumpCmd.Flags().StringVarP(&accountAddress, "address", "a", "", "Account address to retrieve balance (required)")
+	balanceCmd.MarkFlagRequired("address")
 }
 
 func scLeaseBytes(cmd *cobra.Command) (leaseBytes [32]byte) {
@@ -245,7 +261,7 @@ var accountMultisigCmd = &cobra.Command{
 var renameCmd = &cobra.Command{
 	Use:   "rename [old name] [new name]",
 	Short: "Change the human-friendly name of an account",
-	Long:  `Change the human-friendly name of an account`,
+	Long:  `Change the human-friendly name of an account. This is a local-only name, it is not stored on the network.`,
 	Args:  cobra.ExactArgs(2),
 	Run: func(cmd *cobra.Command, args []string) {
 		accountList := makeAccountsList(ensureSingleDataDir())
@@ -325,6 +341,7 @@ var newCmd = &cobra.Command{
 var deleteCmd = &cobra.Command{
 	Use:   "delete",
 	Short: "Delete an account",
+	Long:  `Delete the indicated account. The key management daemon will no longer know about this account, although the account will still exist on the network.`,
 	Args:  validateNoPosArgsFn,
 	Run: func(cmd *cobra.Command, args []string) {
 		dataDir := ensureSingleDataDir()
@@ -343,7 +360,7 @@ var deleteCmd = &cobra.Command{
 }
 
 var newMultisigCmd = &cobra.Command{
-	Use:   "new [addr1 addr2 ...]",
+	Use:   "new [address 1] [address 2]...",
 	Short: "Create a new multisig account",
 	Long:  `Create a new multisig account from a list of existing non-multisig addresses`,
 	Args:  cobra.MinimumNArgs(1),
@@ -388,6 +405,7 @@ var newMultisigCmd = &cobra.Command{
 var deleteMultisigCmd = &cobra.Command{
 	Use:   "delete",
 	Short: "Delete a multisig account",
+	Long:  `Delete a multisig account. Like ordinary account delete, the local node will no longer know about the account, but it may still exist on the network.`,
 	Args:  validateNoPosArgsFn,
 	Run: func(cmd *cobra.Command, args []string) {
 		dataDir := ensureSingleDataDir()
@@ -408,6 +426,7 @@ var deleteMultisigCmd = &cobra.Command{
 var infoMultisigCmd = &cobra.Command{
 	Use:   "info",
 	Short: "Print information about a multisig account",
+	Long:  `Print information about a multisig account, such as its Algorand multisig version, or the number of keys needed to validate a transaction from the multisig account.`,
 	Args:  validateNoPosArgsFn,
 	Run: func(cmd *cobra.Command, args []string) {
 		dataDir := ensureSingleDataDir()
@@ -431,7 +450,7 @@ var infoMultisigCmd = &cobra.Command{
 var listCmd = &cobra.Command{
 	Use:   "list",
 	Short: "Show the list of Algorand accounts on this machine",
-	Long:  `Show the list of Algorand accounts on this machine. Also indicates whether the account is [offline] or [online], and if the account is the default account for goal.`,
+	Long:  `Show the list of Algorand accounts on this machine. Indicates whether the account is [offline] or [online], and if the account is the default account for goal. Also displays account information with --info.`,
 	Args:  validateNoPosArgsFn,
 	Run: func(cmd *cobra.Command, args []string) {
 		dataDir := ensureSingleDataDir()
@@ -453,6 +472,8 @@ var listCmd = &cobra.Command{
 			os.Exit(0)
 		}
 
+		accountInfoError := false
+
 		// For each address, request information about it from algod
 		for _, addr := range addrs {
 			response, _ := client.AccountInformation(addr.Addr)
@@ -471,50 +492,181 @@ var listCmd = &cobra.Command{
 				accountList.outputAccount(addr.Addr, response, nil)
 			}
 
-			for aid, bal := range response.Assets {
-				frozen := ""
-				if bal.Frozen {
-					frozen = ", frozen"
-				}
-
-				unitName := "base units"
-				assetName := ""
-				assetURL := ""
-				assetMetadata := ""
-				creatorInfo, err := client.AccountInformation(bal.Creator)
-				assetDecimals := uint32(0)
-				decimalInfo := " (no decimal info) "
-				if err == nil {
-					params, ok := creatorInfo.AssetParams[aid]
-					if ok {
-						unitName = "units"
-						if params.UnitName != "" {
-							unitName = params.UnitName
-						}
-						if params.AssetName != "" {
-							assetName = fmt.Sprintf(", name %s", params.AssetName)
-						}
-						if params.URL != "" {
-							assetURL = fmt.Sprintf(", url %s", params.URL)
-						}
-						if params.MetadataHash != nil {
-							assetMetadata = fmt.Sprintf(", metadata %x", params.MetadataHash)
-						}
-						assetDecimals = params.Decimals
-						decimalInfo = ""
-					}
-				}
-
-				fmt.Printf("\t%20s %-8s%s (creator %s, ID %d%s%s%s%s)\n", assetDecimalsFmt(bal.Amount, assetDecimals), unitName, decimalInfo, bal.Creator, aid, assetName, assetURL, assetMetadata, frozen)
+			if listAccountInfo {
+				hasError := printAccountInfo(client, addr.Addr, response)
+				accountInfoError = accountInfoError || hasError
 			}
+		}
+
+		if accountInfoError {
+			os.Exit(1)
 		}
 	},
 }
 
+var infoCmd = &cobra.Command{
+	Use:   "info",
+	Short: "Retrieve information about the assets and applications belonging to the specified account",
+	Long:  `Retrieve information about the assets and applications the specified account has created or opted into.`,
+	Args:  validateNoPosArgsFn,
+	Run: func(cmd *cobra.Command, args []string) {
+		dataDir := ensureSingleDataDir()
+		client := ensureAlgodClient(dataDir)
+		response, err := client.AccountInformation(accountAddress)
+		if err != nil {
+			reportErrorf(errorRequestFail, err)
+		}
+
+		hasError := printAccountInfo(client, accountAddress, response)
+		if hasError {
+			os.Exit(1)
+		}
+	},
+}
+
+func sortUint64Slice(slice []uint64) {
+	sort.Slice(slice, func(i, j int) bool {
+		return slice[i] < slice[j]
+	})
+}
+
+func printAccountInfo(client libgoal.Client, address string, account v1.Account) bool {
+	createdAssets := []uint64{}
+	for id := range account.AssetParams {
+		createdAssets = append(createdAssets, id)
+	}
+	sortUint64Slice(createdAssets)
+
+	heldAssets := []uint64{}
+	for id := range account.Assets {
+		heldAssets = append(heldAssets, id)
+	}
+	sortUint64Slice(heldAssets)
+
+	createdApps := []uint64{}
+	for id := range account.AppParams {
+		createdApps = append(createdApps, id)
+	}
+	sortUint64Slice(createdApps)
+
+	optedInApps := []uint64{}
+	for id := range account.AppLocalStates {
+		optedInApps = append(optedInApps, id)
+	}
+	sortUint64Slice(optedInApps)
+
+	report := &strings.Builder{}
+	errorReport := &strings.Builder{}
+	hasError := false
+
+	fmt.Fprintln(report, "Created Assets:")
+	if len(createdAssets) == 0 {
+		fmt.Fprintln(report, "\t<none>")
+	}
+	for _, id := range createdAssets {
+		assetParams := account.AssetParams[id]
+
+		name := assetParams.AssetName
+		if len(name) == 0 {
+			name = "<unnamed>"
+		}
+		_, name = unicodePrintable(name)
+		units := assetParams.UnitName
+		if len(units) == 0 {
+			units = "units"
+		}
+		_, units = unicodePrintable(units)
+		total := assetDecimalsFmt(assetParams.Total, assetParams.Decimals)
+		url := ""
+		if len(assetParams.URL) != 0 {
+			url = fmt.Sprintf(", %s", assetParams.URL)
+		}
+
+		fmt.Fprintf(report, "\tID %d, %s, supply %s %s%s\n", id, name, total, units, url)
+	}
+
+	fmt.Fprintln(report, "Held Assets:")
+	if len(heldAssets) == 0 {
+		fmt.Fprintln(report, "\t<none>")
+	}
+	for _, id := range heldAssets {
+		assetHolding := account.Assets[id]
+		assetParams, err := client.AssetInformation(id)
+		if err != nil {
+			hasError = true
+			fmt.Fprintf(errorReport, "Error: Unable to retrieve asset information for asset %d referred to by account %s: %v\n", id, address, err)
+			fmt.Fprintf(report, "\tID %d, error\n", id)
+		}
+
+		amount := assetDecimalsFmt(assetHolding.Amount, assetParams.Decimals)
+
+		assetName := assetParams.AssetName
+		if len(assetName) == 0 {
+			assetName = "<unnamed>"
+		}
+		_, assetName = unicodePrintable(assetName)
+
+		unitName := assetParams.UnitName
+		if len(unitName) == 0 {
+			unitName = "units"
+		}
+		_, unitName = unicodePrintable(unitName)
+
+		frozen := ""
+		if assetHolding.Frozen {
+			frozen = " (frozen)"
+		}
+
+		fmt.Fprintf(report, "\tID %d, %s, balance %s %s%s\n", id, assetName, amount, unitName, frozen)
+	}
+
+	fmt.Fprintln(report, "Created Apps:")
+	if len(createdApps) == 0 {
+		fmt.Fprintln(report, "\t<none>")
+	}
+	for _, id := range createdApps {
+		appParams := account.AppParams[id]
+		usedInts := 0
+		usedBytes := 0
+		for _, value := range appParams.GlobalState {
+			if value.Type == "u" {
+				usedInts++
+			} else {
+				usedBytes++
+			}
+		}
+		fmt.Fprintf(report, "\tID %d, global state used %d/%d uints, %d/%d byte slices\n", id, usedInts, appParams.GlobalStateSchema.NumUint, usedBytes, appParams.GlobalStateSchema.NumByteSlice)
+	}
+
+	fmt.Fprintln(report, "Opted In Apps:")
+	if len(optedInApps) == 0 {
+		fmt.Fprintln(report, "\t<none>")
+	}
+	for _, id := range optedInApps {
+		localState := account.AppLocalStates[id]
+		usedInts := 0
+		usedBytes := 0
+		for _, value := range localState.KeyValue {
+			if value.Type == "u" {
+				usedInts++
+			} else {
+				usedBytes++
+			}
+		}
+		fmt.Fprintf(report, "\tID %d, local state used %d/%d uints, %d/%d byte slices\n", id, usedInts, localState.Schema.NumUint, usedBytes, localState.Schema.NumByteSlice)
+	}
+
+	if hasError {
+		fmt.Fprint(os.Stderr, errorReport.String())
+	}
+	fmt.Print(report.String())
+	return hasError
+}
+
 var balanceCmd = &cobra.Command{
 	Use:   "balance",
-	Short: "Retrieve the balance for the specified account, in microAlgos",
-	Long:  `Retrieve the balance for the specified account, in microAlgos`,
+	Short: "Retrieve the balances for the specified account",
+	Long:  `Retrieve the balance record for the specified account. Algo balance is displayed in microAlgos.`,
 	Args:  validateNoPosArgsFn,
 	Run: func(cmd *cobra.Command, args []string) {
 		dataDir := ensureSingleDataDir()
@@ -528,10 +680,38 @@ var balanceCmd = &cobra.Command{
 	},
 }
 
+var dumpCmd = &cobra.Command{
+	Use:   "dump",
+	Short: "Dump the balance record for the specified account",
+	Long:  `Dump the balance record for the specified account to terminal as JSON or to a file as MessagePack.`,
+	Args:  validateNoPosArgsFn,
+	Run: func(cmd *cobra.Command, args []string) {
+		dataDir := ensureSingleDataDir()
+		client := ensureAlgodClient(dataDir)
+		rawAddress, err := basics.UnmarshalChecksumAddress(accountAddress)
+		if err != nil {
+			reportErrorf(errorParseAddr, err)
+		}
+		accountData, err := client.AccountData(accountAddress)
+		if err != nil {
+			reportErrorf(errorRequestFail, err)
+		}
+
+		br := basics.BalanceRecord{Addr: rawAddress, AccountData: accountData}
+		if len(dumpOutFile) > 0 {
+			data := protocol.Encode(&br)
+			writeFile(dumpOutFile, data, 0644)
+		} else {
+			data := protocol.EncodeJSONStrict(&br)
+			fmt.Println(string(data))
+		}
+	},
+}
+
 var rewardsCmd = &cobra.Command{
 	Use:   "rewards",
 	Short: "Retrieve the rewards for the specified account",
-	Long:  `Retrieve the rewards for the specified account`,
+	Long:  `Retrieve the rewards for the specified account, including pending rewards. Units displayed are microAlgos.`,
 	Args:  validateNoPosArgsFn,
 	Run: func(cmd *cobra.Command, args []string) {
 		dataDir := ensureSingleDataDir()
@@ -636,7 +816,7 @@ func changeAccountOnlineStatus(acct string, part *algodAcct.Participation, goOnl
 var addParticipationKeyCmd = &cobra.Command{
 	Use:   "addpartkey",
 	Short: "Generate a participation key for the specified account",
-	Long:  `Generate a participation key for the specified account`,
+	Long:  `Generate a participation key for the specified account. This participation key can then be used for going online and participating in consensus.`,
 	Args:  validateNoPosArgsFn,
 	Run: func(cmd *cobra.Command, args []string) {
 		dataDir := ensureSingleDataDir()
@@ -690,7 +870,7 @@ No --delete-input flag specified, exiting without installing key.`)
 var renewParticipationKeyCmd = &cobra.Command{
 	Use:   "renewpartkey",
 	Short: "Renew an account's participation key",
-	Long:  `Generate a participation key for the specified account and register it`,
+	Long:  `Generate a participation key for the specified account and issue the necessary transaction to register it.`,
 	Args:  validateNoPosArgsFn,
 	Run: func(cmd *cobra.Command, args []string) {
 		dataDir := ensureSingleDataDir()
@@ -755,7 +935,7 @@ func generateAndRegisterPartKey(address string, currentRound, lastValidRound uin
 var renewAllParticipationKeyCmd = &cobra.Command{
 	Use:   "renewallpartkeys",
 	Short: "Renew all existing participation keys",
-	Long:  `Generate new participation keys for all existing accounts with participation keys and register them`,
+	Long:  `Generate new participation keys for all existing accounts with participation keys and issue the necessary transactions to register them.`,
 	Args:  validateNoPosArgsFn,
 	Run: func(cmd *cobra.Command, args []string) {
 		onDataDirs(func(dataDir string) {
@@ -835,6 +1015,7 @@ func renewPartKeysInDir(dataDir string, lastValidRound uint64, fee uint64, lease
 var listParticipationKeysCmd = &cobra.Command{
 	Use:   "listpartkeys",
 	Short: "List participation keys",
+	Long:  `List all participation keys tracked by algod, with additional information such as key validity period.`,
 	Args:  validateNoPosArgsFn,
 	Run: func(cmd *cobra.Command, args []string) {
 		dataDir := ensureSingleDataDir()
@@ -859,7 +1040,8 @@ var listParticipationKeysCmd = &cobra.Command{
 			if err == nil {
 				votingBytes := parts[fn].Voting.OneTimeSignatureVerifier
 				vrfBytes := parts[fn].VRF.PK
-				if string(onlineAccountInfo.Participation.ParticipationPK) == string(votingBytes[:]) &&
+				if onlineAccountInfo.Participation != nil &&
+					(string(onlineAccountInfo.Participation.ParticipationPK) == string(votingBytes[:])) &&
 					(string(onlineAccountInfo.Participation.VRFPK) == string(vrfBytes[:])) &&
 					(onlineAccountInfo.Participation.VoteFirst == uint64(parts[fn].FirstValid)) &&
 					(onlineAccountInfo.Participation.VoteLast == uint64(parts[fn].LastValid)) &&
@@ -940,7 +1122,7 @@ var importCmd = &cobra.Command{
 var exportCmd = &cobra.Command{
 	Use:   "export",
 	Short: "Export an account key for use with account import",
-	Long:  "Export an account mnemonic seed, for use with account import. This exports the seed for a single account and should not be confused with the wallet mnemonic.",
+	Long:  "Export an account mnemonic seed, for use with account import. This exports the seed for a single account and should NOT be confused with the wallet mnemonic.",
 	Run: func(cmd *cobra.Command, args []string) {
 		dataDir := ensureSingleDataDir()
 		client := ensureKmdClient(dataDir)
@@ -1013,6 +1195,7 @@ var importRootKeysCmd = &cobra.Command{
 
 			// Fetch an account.Participation from the database
 			root, err := algodAcct.RestoreRoot(handle)
+			handle.Close()
 			if err != nil {
 				// Couldn't read it, skip it
 				err = nil
@@ -1069,7 +1252,7 @@ type partkeyInfo struct {
 var partkeyInfoCmd = &cobra.Command{
 	Use:   "partkeyinfo",
 	Short: "Output details about all available part keys",
-	Long:  `Output details about all available part keys in the specified data directory(ies)`,
+	Long:  `Output details about all available part keys in the specified data directory(ies), such as key validity period.`,
 	Args:  validateNoPosArgsFn,
 	Run: func(cmd *cobra.Command, args []string) {
 

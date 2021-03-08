@@ -1,4 +1,4 @@
-// Copyright (C) 2019 Algorand, Inc.
+// Copyright (C) 2019-2021 Algorand, Inc.
 // This file is part of go-algorand
 //
 // go-algorand is free software: you can redistribute it and/or modify
@@ -30,7 +30,6 @@ func init() {
 var completionCmd = &cobra.Command{
 	Use:   "completion",
 	Short: "Shell completion helper",
-	Long:  "Shell completion helper",
 	Args:  validateNoPosArgsFn,
 	Run: func(cmd *cobra.Command, args []string) {
 		// If no arguments passed, we should fallback to help
@@ -41,7 +40,6 @@ var completionCmd = &cobra.Command{
 var bashCompletionCmd = &cobra.Command{
 	Use:   "bash",
 	Short: "Generate bash completion commands",
-	Long:  "Generate bash completion commands",
 	Args:  validateNoPosArgsFn,
 	Run: func(cmd *cobra.Command, _ []string) {
 		rootCmd.GenBashCompletion(os.Stdout)
@@ -51,7 +49,6 @@ var bashCompletionCmd = &cobra.Command{
 var zshCompletionCmd = &cobra.Command{
 	Use:   "zsh",
 	Short: "Generate zsh completion commands",
-	Long:  "Generate zsh completion commands",
 	Args:  validateNoPosArgsFn,
 	Run: func(cmd *cobra.Command, _ []string) {
 		rootCmd.GenZshCompletion(os.Stdout)

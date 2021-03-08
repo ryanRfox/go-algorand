@@ -1,4 +1,4 @@
-// Copyright (C) 2019 Algorand, Inc.
+// Copyright (C) 2019-2021 Algorand, Inc.
 // This file is part of go-algorand
 //
 // go-algorand is free software: you can redistribute it and/or modify
@@ -30,6 +30,9 @@ import (
 	"github.com/spf13/cobra/doc"
 	"golang.org/x/crypto/ssh/terminal"
 
+	algodclient "github.com/algorand/go-algorand/daemon/algod/api/client"
+	kmdclient "github.com/algorand/go-algorand/daemon/kmd/client"
+
 	"github.com/algorand/go-algorand/config"
 	"github.com/algorand/go-algorand/daemon/algod/api/spec/common"
 	"github.com/algorand/go-algorand/data/bookkeeping"
@@ -57,6 +60,7 @@ func init() {
 	rootCmd.Flags().BoolVarP(&versionCheck, "version", "v", false, "Display and write current build version and exit")
 	rootCmd.AddCommand(licenseCmd)
 	rootCmd.AddCommand(reportCmd)
+	rootCmd.AddCommand(protoCmd)
 
 	// account.go
 	rootCmd.AddCommand(accountCmd)
@@ -88,6 +92,9 @@ func init() {
 	// completion.go
 	rootCmd.AddCommand(completionCmd)
 
+	// application.go
+	rootCmd.AddCommand(appCmd)
+
 	// Config
 	defaultDataDirValue := []string{""}
 	rootCmd.PersistentFlags().StringArrayVarP(&dataDirs, "datadir", "d", defaultDataDirValue, "Data directory for the node")
@@ -96,7 +103,7 @@ func init() {
 
 var rootCmd = &cobra.Command{
 	Use:   "goal",
-	Short: "CLI for interacting with Algorand.",
+	Short: "CLI for interacting with Algorand",
 	Long:  `GOAL is the CLI for interacting Algorand software instance. The binary 'goal' is installed alongside the algod binary and is considered an integral part of the complete installation. The binaries should be used in tandem - you should not try to use a version of goal with a different version of algod.`,
 	Args:  validateNoPosArgsFn,
 	Run: func(cmd *cobra.Command, args []string) {
@@ -154,7 +161,6 @@ func main() {
 var versionCmd = &cobra.Command{
 	Use:   "version",
 	Short: "The current version of the Algorand daemon (algod)",
-	Long:  `The current version of the Algorand daemon (algod)`,
 	Args:  validateNoPosArgsFn,
 	Run: func(cmd *cobra.Command, args []string) {
 		onDataDirs(func(dataDir string) {
@@ -179,7 +185,6 @@ var versionCmd = &cobra.Command{
 var licenseCmd = &cobra.Command{
 	Use:   "license",
 	Short: "Display license information",
-	Long:  `Displays license information`,
 	Args:  validateNoPosArgsFn,
 	Run: func(cmd *cobra.Command, args []string) {
 		fmt.Println(config.GetLicenseInfo())
@@ -189,7 +194,7 @@ var licenseCmd = &cobra.Command{
 var reportCmd = &cobra.Command{
 	Use:   "report",
 	Short: "",
-	Long:  "Produces report helpful for debugging",
+	Long:  "Produces report helpful for debugging.",
 	Args:  validateNoPosArgsFn,
 	Run: func(cmd *cobra.Command, args []string) {
 		fmt.Println(config.FormatVersionAndLicense())
@@ -216,6 +221,16 @@ var reportCmd = &cobra.Command{
 		}
 		fmt.Println()
 		onDataDirs(getStatus)
+	},
+}
+
+var protoCmd = &cobra.Command{
+	Use:   "protocols",
+	Short: "",
+	Long:  "Dump standard consensus protocols as json to stdout.",
+	Args:  validateNoPosArgsFn,
+	Run: func(cmd *cobra.Command, args []string) {
+		os.Stdout.Write(protocol.EncodeJSON(config.Consensus))
 	},
 }
 
@@ -366,6 +381,7 @@ func ensureGoalClient(dataDir string, clientType libgoal.ClientType) libgoal.Cli
 	if err != nil {
 		reportErrorf(errorNodeStatus, err)
 	}
+	client.SetAPIVersionAffinity(algodclient.APIVersionV2, kmdclient.APIVersionV1)
 	return client
 }
 
@@ -476,36 +492,50 @@ func ensurePassword() []byte {
 }
 
 func reportInfoln(args ...interface{}) {
-	fmt.Println(args...)
-	// log.Infoln(args...)
+	for _, line := range strings.Split(fmt.Sprint(args...), "\n") {
+		printable, line := unicodePrintable(line)
+		if !printable {
+			fmt.Println(infoNonPrintableCharacters)
+		}
+		fmt.Println(line)
+	}
 }
 
 func reportInfof(format string, args ...interface{}) {
-	fmt.Printf(format+"\n", args...)
-	// log.Infof(format, args...)
+	reportInfoln(fmt.Sprintf(format, args...))
 }
 
 func reportWarnln(args ...interface{}) {
 	fmt.Print("Warning: ")
-	fmt.Println(args...)
-	// log.Warnln(args...)
+
+	for _, line := range strings.Split(fmt.Sprint(args...), "\n") {
+		printable, line := unicodePrintable(line)
+		if !printable {
+			fmt.Println(infoNonPrintableCharacters)
+		}
+
+		fmt.Println(line)
+	}
 }
 
 func reportWarnf(format string, args ...interface{}) {
-	fmt.Printf("Warning: "+format+"\n", args...)
-	// log.Warnf(format, args...)
+	reportWarnln(fmt.Sprintf(format, args...))
 }
 
 func reportErrorln(args ...interface{}) {
-	fmt.Fprintln(os.Stderr, args...)
-	// log.Warnln(args...)
+	outStr := fmt.Sprint(args...)
+	for _, line := range strings.Split(outStr, "\n") {
+		printable, line := unicodePrintable(line)
+		if !printable {
+			fmt.Fprintln(os.Stderr, errorNonPrintableCharacters)
+		}
+		fmt.Fprintln(os.Stderr, line)
+	}
 	os.Exit(1)
 }
 
 func reportErrorf(format string, args ...interface{}) {
-	fmt.Fprintf(os.Stderr, format+"\n", args...)
-	// log.Warnf(format, args...)
-	os.Exit(1)
+	reportErrorln(fmt.Sprintf(format, args...))
 }
 
 // writeFile is a wrapper of ioutil.WriteFile which considers the special

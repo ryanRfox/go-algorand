@@ -1,4 +1,4 @@
-// Copyright (C) 2019 Algorand, Inc.
+// Copyright (C) 2019-2021 Algorand, Inc.
 // This file is part of go-algorand
 //
 // go-algorand is free software: you can redistribute it and/or modify
@@ -78,7 +78,7 @@ func (b BalanceMap) Put(record basics.BalanceRecord) error {
 // set up a BalanceMap for a transaction containing only the transactions RelevantAddrs.
 func makeTestBalancesForTransaction(tx Transaction) BalanceMap {
 	bals := make(BalanceMap)
-	for _, addr := range tx.RelevantAddrs(SpecialAddresses{RewardsPool: poolAddr}, config.Consensus[protocol.ConsensusCurrentVersion]) {
+	for _, addr := range tx.RelevantAddrs(SpecialAddresses{RewardsPool: poolAddr}) {
 		bals[addr] = basics.BalanceRecord{Addr: addr}
 	}
 	return bals

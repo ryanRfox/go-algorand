@@ -1,4 +1,4 @@
-// Copyright (C) 2019 Algorand, Inc.
+// Copyright (C) 2019-2021 Algorand, Inc.
 // This file is part of go-algorand
 //
 // go-algorand is free software: you can redistribute it and/or modify
@@ -164,7 +164,7 @@ func (t *proposalTracker) handle(r routerHandle, p player, e event) event {
 		t.Freezer = t.Freezer.freeze()
 		return e
 
-	case softThreshold:
+	case softThreshold, certThreshold:
 		e := e.(thresholdEvent)
 		t.Staging = e.Proposal
 
@@ -208,7 +208,7 @@ type errProposalTrackerSenderDup struct {
 }
 
 func (err errProposalTrackerSenderDup) Error() string {
-	return fmt.Sprintf("proposalTracker: filtered vote: sender %v had already sent a vote in round %v period %v", err.Sender, err.Round, err.Period)
+	return fmt.Sprintf("proposalTracker: filtered vote: sender %v had already sent a vote in round %d period %d", err.Sender, err.Round, err.Period)
 
 }
 

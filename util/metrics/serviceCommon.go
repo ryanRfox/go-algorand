@@ -1,4 +1,4 @@
-// Copyright (C) 2019 Algorand, Inc.
+// Copyright (C) 2019-2021 Algorand, Inc.
 // This file is part of go-algorand
 //
 // go-algorand is free software: you can redistribute it and/or modify
@@ -24,7 +24,7 @@ import (
 )
 
 // ServiceConfig would contain all the information we need in order to create a listening server endpoint.
-// We migth want to support rolling port numbers so that we could easily support multiple endpoints per machine.
+// We might want to support rolling port numbers so that we could easily support multiple endpoints per machine.
 // ( note that multiple endpoints per machine doesn't solve the question "how would the prometheus server figure that out")
 type ServiceConfig struct {
 	NodeExporterListenAddress string

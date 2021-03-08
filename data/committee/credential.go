@@ -1,4 +1,4 @@
-// Copyright (C) 2019 Algorand, Inc.
+// Copyright (C) 2019-2021 Algorand, Inc.
 // This file is part of go-algorand
 //
 // go-algorand is free software: you can redistribute it and/or modify
@@ -134,6 +134,7 @@ func MakeCredential(secrets *crypto.VrfPrivkey, sel Selector) UnauthenticatedCre
 
 // Less returns true if this Credential is less than the other credential; false
 // otherwise (i.e., >=).
+// Used for breaking ties when there are multiple proposals.
 //
 // Precondition: both credentials have nonzero weight
 func (cred Credential) Less(otherCred Credential) bool {
@@ -155,11 +156,32 @@ func (cred Credential) Selected() bool {
 	return cred.Weight > 0
 }
 
+// lowestOutput is used for breaking ties when there are multiple proposals.
+// People will vote for the proposal whose credential has the lowest lowestOutput.
+//
+// We hash the credential and interpret the output as a bigint.
+// For credentials with weight w > 1, we hash the credential w times (with
+// different counter values) and use the lowest output.
+//
+// This is because a weight w credential is simulating being selected to be on the
+// leader committee w times, so each of the w proposals would have a different hash,
+// and the lowest would win.
 func (cred Credential) lowestOutput() *big.Int {
 	var lowest big.Int
 
 	h1 := cred.VrfOut
-	for i := uint64(0); i < cred.Weight; i++ {
+	// It is important that i start at 1 rather than 0 because cred.Hashable
+	// was already hashed with iter = 0 earlier (in UnauthenticatedCredential.Verify)
+	// for determining the weight of the credential. A nonzero iter provides
+	// domain separation between lowestOutput and UnauthenticatedCredential.Verify
+	//
+	// If we reused the iter = 0 hash output here it would be nonuniformly
+	// distributed (because lowestOutput can only get called if weight > 0).
+	// In particular if i starts at 0 then weight-1 credentials are at a
+	// significant disadvantage because UnauthenticatedCredential.Verify
+	// wants the hash to be large but tiebreaking between proposals wants
+	// the hash to be small.
+	for i := uint64(1); i <= cred.Weight; i++ {
 		var h crypto.Digest
 		if cred.DomainSeparationEnabled {
 			cred.Hashable.Iter = i
@@ -170,7 +192,7 @@ func (cred Credential) lowestOutput() *big.Int {
 			h = crypto.Hash(append(h1[:], h2[:]...))
 		}
 
-		if i == 0 {
+		if i == 1 {
 			lowest.SetBytes(h[:])
 		} else {
 			var temp big.Int
@@ -184,6 +206,19 @@ func (cred Credential) lowestOutput() *big.Int {
 	return &lowest
 }
 
+// LowestOutputDigest gives the lowestOutput as a crypto.Digest, which allows
+// pretty-printing a proposal's lowest output.
+// This function is only used for debugging.
+func (cred Credential) LowestOutputDigest() crypto.Digest {
+	lbytes := cred.lowestOutput().Bytes()
+	var out crypto.Digest
+	if len(lbytes) > len(out) {
+		panic("Cred lowest output too long")
+	}
+	copy(out[len(out)-len(lbytes):], lbytes)
+	return out
+}
+
 func (cred hashableCredential) ToBeHashed() (protocol.HashID, []byte) {
-	return protocol.Credential, protocol.Encode(cred)
+	return protocol.Credential, protocol.Encode(&cred)
 }

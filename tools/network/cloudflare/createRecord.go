@@ -1,4 +1,4 @@
-// Copyright (C) 2019 Algorand, Inc.
+// Copyright (C) 2019-2021 Algorand, Inc.
 // This file is part of go-algorand
 //
 // go-algorand is free software: you can redistribute it and/or modify
@@ -148,9 +148,12 @@ func parseCreateDNSRecordResponse(response *http.Response) (*CreateDNSRecordResp
 	if err != nil {
 		return nil, err
 	}
+	if response.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("Response status code %d; body = %s", response.StatusCode, string(body))
+	}
 	var parsedReponse CreateDNSRecordResponse
 	if err := json.Unmarshal(body, &parsedReponse); err != nil {
-		return nil, err
+		return nil, fmt.Errorf("failed to unmarshal response body '%s' : %v", string(body), err)
 	}
 	return &parsedReponse, nil
 }

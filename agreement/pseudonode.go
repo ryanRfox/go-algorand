@@ -1,4 +1,4 @@
-// Copyright (C) 2019 Algorand, Inc.
+// Copyright (C) 2019-2021 Algorand, Inc.
 // This file is part of go-algorand
 //
 // go-algorand is free software: you can redistribute it and/or modify
@@ -22,6 +22,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/algorand/go-algorand/config"
 	"github.com/algorand/go-algorand/data/account"
 	"github.com/algorand/go-algorand/data/basics"
 	"github.com/algorand/go-algorand/logging"
@@ -29,9 +30,6 @@ import (
 	"github.com/algorand/go-algorand/logging/telemetryspec"
 	"github.com/algorand/go-algorand/protocol"
 )
-
-// AssemblyTime is the max amount of time to spend on generating a proposal block.
-const AssemblyTime time.Duration = 250 * time.Millisecond
 
 // TODO put these in config
 const (
@@ -115,21 +113,34 @@ type pseudonodeVerifier struct {
 	incomingTasks chan pseudonodeTask
 }
 
+//msgp:ignore verifiedCryptoResults
 type verifiedCryptoResults []asyncVerifyVoteResponse
 
-func makePseudonode(factory BlockFactory, validator BlockValidator, keys KeyManager, ledger Ledger, voteVerifier *AsyncVoteVerifier, log serviceLogger) pseudonode {
+// pseudonodeParams struct provide the parameters required to create a pseudonode
+type pseudonodeParams struct {
+	factory      BlockFactory
+	validator    BlockValidator
+	keys         KeyManager
+	ledger       Ledger
+	voteVerifier *AsyncVoteVerifier
+	log          serviceLogger
+	monitor      *coserviceMonitor
+}
+
+func makePseudonode(params pseudonodeParams) pseudonode {
 	pn := asyncPseudonode{
-		factory:   factory,
-		validator: validator,
-		keys:      keys,
-		ledger:    ledger,
-		log:       log,
+		factory:   params.factory,
+		validator: params.validator,
+		keys:      params.keys,
+		ledger:    params.ledger,
+		log:       params.log,
 		quit:      make(chan struct{}),
 		closeWg:   &sync.WaitGroup{},
+		monitor:   params.monitor,
 	}
 
-	pn.proposalsVerifier = pn.makePseudonodeVerifier(voteVerifier)
-	pn.votesVerifier = pn.makePseudonodeVerifier(voteVerifier)
+	pn.proposalsVerifier = pn.makePseudonodeVerifier(params.voteVerifier)
+	pn.votesVerifier = pn.makePseudonodeVerifier(params.voteVerifier)
 	return pn
 }
 
@@ -250,10 +261,12 @@ func (n asyncPseudonode) getParticipations(procName string, round basics.Round) 
 
 // makeProposals creates a slice of block proposals for the given round and period.
 func (n asyncPseudonode) makeProposals(round basics.Round, period period, accounts []account.Participation) ([]proposal, []unauthenticatedVote) {
-	deadline := time.Now().Add(AssemblyTime)
+	deadline := time.Now().Add(config.ProposalAssemblyTime)
 	ve, err := n.factory.AssembleBlock(round, deadline)
 	if err != nil {
-		n.log.Errorf("pseudonode.makeProposals: could not generate a proposal for round %v: %v", round, err)
+		if err != ErrAssembleBlockRoundStale {
+			n.log.Errorf("pseudonode.makeProposals: could not generate a proposal for round %d: %v", round, err)
+		}
 		return nil, nil
 	}
 
@@ -361,31 +374,35 @@ func (t pseudonodeVotesTask) execute(verifier *AsyncVoteVerifier, quit chan stru
 	for _, result := range verifiedResults {
 		totalWeight += result.v.Cred.Weight
 	}
-	for _, result := range verifiedResults {
-		vote := result.v
-		logEvent := logspec.AgreementEvent{
-			Type:         logspec.VoteBroadcast,
-			Sender:       vote.R.Sender.String(),
-			Hash:         vote.R.Proposal.BlockDigest.String(),
-			ObjectRound:  uint64(vote.R.Round),
-			ObjectPeriod: uint64(vote.R.Period),
-			ObjectStep:   uint64(vote.R.Step),
-			Weight:       vote.Cred.Weight,
-			WeightTotal:  totalWeight,
+	if t.node.log.IsLevelEnabled(logging.Info) {
+		for _, result := range verifiedResults {
+			vote := result.v
+			logEvent := logspec.AgreementEvent{
+				Type:         logspec.VoteBroadcast,
+				Sender:       vote.R.Sender.String(),
+				Hash:         vote.R.Proposal.BlockDigest.String(),
+				ObjectRound:  uint64(vote.R.Round),
+				ObjectPeriod: uint64(vote.R.Period),
+				ObjectStep:   uint64(vote.R.Step),
+				Weight:       vote.Cred.Weight,
+				WeightTotal:  totalWeight,
+			}
+			t.node.log.with(logEvent).Infof("vote created for broadcast (weight %d, total weight %d)", vote.Cred.Weight, totalWeight)
+			if !t.node.log.GetTelemetryEnabled() {
+				continue
+			}
+			t.node.log.EventWithDetails(telemetryspec.Agreement, telemetryspec.VoteSentEvent, telemetryspec.VoteEventDetails{
+				Address: vote.R.Sender.String(),
+				Hash:    vote.R.Proposal.BlockDigest.String(),
+				Round:   uint64(vote.R.Round),
+				Period:  uint64(vote.R.Period),
+				Step:    uint64(vote.R.Step),
+				Weight:  vote.Cred.Weight,
+				// Recovered: false,
+			})
 		}
-		t.node.log.with(logEvent).Infof("vote created for broadcast (weight %v, total weight %v)", vote.Cred.Weight, totalWeight)
-		t.node.log.EventWithDetails(telemetryspec.Agreement, telemetryspec.VoteSentEvent, telemetryspec.VoteEventDetails{
-			Address: vote.R.Sender.String(),
-			Hash:    vote.R.Proposal.BlockDigest.String(),
-			Round:   uint64(vote.R.Round),
-			Period:  uint64(vote.R.Period),
-			Step:    uint64(vote.R.Step),
-			Weight:  vote.Cred.Weight,
-			// Recovered: false,
-		})
+		t.node.log.Infof("pseudonode.makeVotes: %v votes created for %v at (%v, %v, %v), total weight %v", len(verifiedResults), t.prop, t.round, t.period, t.step, totalWeight)
 	}
-	t.node.log.Infof("pseudonode.makeVotes: %v votes created for %v at (%v, %v, %v), total weight %v", len(verifiedResults), t.prop, t.round, t.period, t.step, totalWeight)
-
 	if len(verifiedResults) > 0 {
 		// wait until the persist state is flushed, as we don't want to send any vote unless we've completed flushing it to disk.
 		// at this point, the error was already logged.
@@ -476,15 +493,17 @@ func (t pseudonodeProposalsTask) execute(verifier *AsyncVoteVerifier, quit chan 
 			ObjectRound:  uint64(vote.R.Round),
 			ObjectPeriod: uint64(vote.R.Period),
 		}
-		t.node.log.with(logEvent).Infof("pseudonode.makeProposals: proposal created for (%v, %v)", vote.R.Round, vote.R.Period)
-		t.node.log.EventWithDetails(telemetryspec.Agreement, telemetryspec.BlockProposedEvent, telemetryspec.BlockProposedEventDetails{
-			Hash:    vote.R.Proposal.BlockDigest.String(),
-			Address: vote.R.Sender.String(),
-			Round:   uint64(vote.R.Round),
-			Period:  uint64(vote.R.Period),
-		})
+		t.node.log.with(logEvent).Infof("pseudonode.makeProposals: proposal created for (%d, %d)", vote.R.Round, vote.R.Period)
+		if t.node.log.GetTelemetryEnabled() {
+			t.node.log.EventWithDetails(telemetryspec.Agreement, telemetryspec.BlockProposedEvent, telemetryspec.BlockProposedEventDetails{
+				Hash:    vote.R.Proposal.BlockDigest.String(),
+				Address: vote.R.Sender.String(),
+				Round:   uint64(vote.R.Round),
+				Period:  uint64(vote.R.Period),
+			})
+		}
 	}
-	t.node.log.Infof("pseudonode.makeProposals: %v proposals created for round %v, period %v", len(verifiedVotes), t.round, t.period)
+	t.node.log.Infof("pseudonode.makeProposals: %d proposals created for round %d, period %d", len(verifiedVotes), t.round, t.period)
 
 	for range verifiedVotes {
 		t.node.monitor.inc(pseudonodeCoserviceType)

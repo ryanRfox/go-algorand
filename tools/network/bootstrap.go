@@ -1,4 +1,4 @@
-// Copyright (C) 2019 Algorand, Inc.
+// Copyright (C) 2019-2021 Algorand, Inc.
 // This file is part of go-algorand
 //
 // go-algorand is free software: you can redistribute it and/or modify
@@ -19,38 +19,47 @@ package network
 import (
 	"context"
 	"fmt"
-	"net"
 
 	"github.com/algorand/go-algorand/logging"
 )
 
 // ReadFromSRV is a helper to collect SRV addresses for a given name.
-func ReadFromSRV(service string, name string, fallbackDNSResolverAddress string) (addrs []string, err error) {
+func ReadFromSRV(service string, protocol string, name string, fallbackDNSResolverAddress string, secure bool) (addrs []string, err error) {
 	log := logging.Base()
 	if name == "" {
 		log.Debug("no dns lookup due to empty name")
 		return
 	}
+	if protocol != "tcp" && protocol != "udp" && protocol != "tls" {
+		err = fmt.Errorf("unsupported protocol '%s' specified", protocol)
+		return
+	}
 
-	_, records, sysLookupErr := net.LookupSRV(service, "tcp", name)
+	controller := NewResolveController(secure, fallbackDNSResolverAddress, log)
+
+	systemResolver := controller.SystemResolver()
+	_, records, sysLookupErr := systemResolver.LookupSRV(context.Background(), service, protocol, name)
 	if sysLookupErr != nil {
-		var resolver Resolver
-		// try to resolve the address. If it's an dotted-numbers format, it would return that right away.
-		// if it's a named address, we would attempt to parse it and might fail.
-		// ( failing isn't that bad; the resolver would internally try to use 8.8.8.8 instead )
-		if DNSIPAddr, err2 := net.ResolveIPAddr("ip", fallbackDNSResolverAddress); err2 == nil {
-			resolver.DNSAddress = *DNSIPAddr
-		} else {
-			log.Infof("ReadFromBootstrap: Failed to resolve fallback DNS resolver address '%s': %v; falling back to default fallback resolver address", fallbackDNSResolverAddress, err2)
+		log.Infof("ReadFromBootstrap: DNS LookupSRV failed when using system resolver: %v", sysLookupErr)
+
+		var fallbackLookupErr error
+		if fallbackDNSResolverAddress != "" {
+			fallbackResolver := controller.FallbackResolver()
+			_, records, fallbackLookupErr = fallbackResolver.LookupSRV(context.Background(), service, protocol, name)
+		}
+		if fallbackLookupErr != nil {
+			log.Infof("ReadFromBootstrap: DNS LookupSRV failed when using fallback '%s' resolver: %v", fallbackDNSResolverAddress, fallbackLookupErr)
 		}
 
-		_, records, err = resolver.LookupSRV(context.Background(), service, "tcp", name)
-		if err != nil {
-			err = fmt.Errorf("ReadFromBootstrap: DNS LookupSRV failed when using system resolver(%v) as well as via %s due to %v", sysLookupErr, resolver.EffectiveResolverDNS(), err)
-			return
+		if fallbackLookupErr != nil || fallbackDNSResolverAddress == "" {
+			fallbackResolver := controller.DefaultResolver()
+			var defaultLookupErr error
+			_, records, defaultLookupErr = fallbackResolver.LookupSRV(context.Background(), service, protocol, name)
+			if defaultLookupErr != nil {
+				err = fmt.Errorf("ReadFromBootstrap: DNS LookupSRV failed when using system resolver(%v), fallback resolver(%v), as well as using default resolver due to %v", sysLookupErr, fallbackLookupErr, defaultLookupErr)
+				return
+			}
 		}
-		// we succeeded when using the public dns. log this.
-		log.Infof("ReadFromBootstrap: DNS LookupSRV failed when using the system resolver(%v); using public DNS(%s) server directly instead.", sysLookupErr, resolver.EffectiveResolverDNS())
 	}
 	for _, srv := range records {
 		// empty target won't take us far; skip these

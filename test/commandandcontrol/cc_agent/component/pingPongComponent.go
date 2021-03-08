@@ -1,4 +1,4 @@
-// Copyright (C) 2019 Algorand, Inc.
+// Copyright (C) 2019-2021 Algorand, Inc.
 // This file is part of go-algorand
 //
 // go-algorand is free software: you can redistribute it and/or modify
@@ -20,7 +20,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	v1 "github.com/algorand/go-algorand/daemon/algod/api/spec/v1"
 	"io/ioutil"
 	"time"
 
@@ -122,12 +121,12 @@ func (componentInstance *PingPongComponentInstance) startPingPong(cfg *pingpong.
 	log.Infof("Preparing to initialize PingPong with config: %+v\n", cfg)
 
 	var accounts map[string]uint64
-	var assetParams map[uint64]v1.AssetParams
+	var cinfo pingpong.CreatablesInfo
 	var resultCfg pingpong.PpConfig
 
 	// Initialize accounts if necessary, this may take several attempts while previous transactions to settle
 	for i := 0; i < 10; i++ {
-		accounts, assetParams, resultCfg, err = pingpong.PrepareAccounts(ac, *cfg)
+		accounts, cinfo, resultCfg, err = pingpong.PrepareAccounts(ac, *cfg)
 		if err == nil {
 			break
 		} else {
@@ -146,7 +145,7 @@ func (componentInstance *PingPongComponentInstance) startPingPong(cfg *pingpong.
 	componentInstance.ctx, componentInstance.cancelFunc = context.WithCancel(context.Background())
 
 	// Kick off the real processing
-	go pingpong.RunPingPong(componentInstance.ctx, ac, accounts, assetParams, resultCfg)
+	go pingpong.RunPingPong(componentInstance.ctx, ac, accounts, cinfo, resultCfg)
 
 	return
 }

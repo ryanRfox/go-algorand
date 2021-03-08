@@ -1,9 +1,7 @@
-dist: xenial
-go:
-  - "1.12"
+os: linux
+dist: bionic
 go_import_path: github.com/algorand/go-algorand
 language: go
-sudo: required
 
 # Don't build tags
 if: tag IS blank
@@ -22,7 +20,6 @@ stages:
 
 jobs:
   allow_failures:
-    - name: External ARM64 Build
     - name: External ARM64 Deploy
     - name: External ARM64 Integration Test
     - name: External ARM Build
@@ -32,18 +29,18 @@ jobs:
     - stage: build_commit
       os: linux
       script:
-        - scripts/travis/build_test.sh
+        - travis_retry scripts/travis/build_test.sh
 
     - stage: build_pr
       os: linux
       name: Ubuntu AMD64 Build
       script:
-        - scripts/travis/build_test.sh
+        - travis_retry scripts/travis/build_test.sh
     - # same stage, parallel job
       os: linux
       name: Ubuntu AMD64 Integration Test
       script:
-        - ./scripts/travis/integration_test.sh
+        - travis_retry ./scripts/travis/integration_test.sh
     - # same stage, parallel job
       name: External ARM64 Build
       os: linux
@@ -55,7 +52,7 @@ jobs:
           packages:
             - awscli
       script:
-        - scripts/travis/external_build.sh ./scripts/travis/build_test.sh
+        - travis_retry scripts/travis/external_build.sh ./scripts/travis/build_test.sh
     - # same stage, parallel job
       name: External ARM64 Integration Test
       os: linux
@@ -73,30 +70,39 @@ jobs:
       osx_image: xcode11
       name: MacOS AMD64 Build
       script:
-        - scripts/travis/build_test.sh
+        - travis_retry scripts/travis/build_test.sh
     - # same stage, parallel job
       os: osx
       osx_image: xcode11
       name: MacOS AMD64 Integration Test
       script:
-        - ./scripts/travis/integration_test.sh
+        - travis_retry ./scripts/travis/integration_test.sh
+    - # same stage, parallel job
+       os: windows
+       name: Windows x64 Build
+       cache:
+         directories:
+           - $HOME/AppData/Local/Temp/chocolatey
+           - /C/tools/msys64
+       script:
+         - travis_retry $mingw64 scripts/travis/build_test.sh
 
     - stage: build_release
       os: linux
       name: Ubuntu AMD64 Build
       script:
-        - ./scripts/travis/build_test.sh
+        - travis_retry ./scripts/travis/build_test.sh
     - # same stage, parallel job
       os: linux
       name: Ubuntu AMD64 Integration Test
       script:
-        - ./scripts/travis/integration_test.sh
+        - travis_retry ./scripts/travis/integration_test.sh
     - # same stage, parallel job
       os: osx
       osx_image: xcode11
       name: MacOS AMD64 Build
       script:
-        - scripts/travis/build_test.sh
+        - travis_retry scripts/travis/build_test.sh
     - # same stage, parallel job
       name: External ARM64 Integration Test
       os: linux
@@ -109,11 +115,22 @@ jobs:
             - awscli
       script:
         - scripts/travis/external_build.sh ./scripts/travis/integration_test.sh
+    - # same stage, parallel job
+       os: windows
+       name: Windows x64 Build
+       cache:
+         directories:
+           - $HOME/AppData/Local/Temp/chocolatey
+           - /C/tools/msys64
+       script:
+         - travis_retry $mingw64 scripts/travis/build_test.sh
 
     - stage: deploy
       name: Ubuntu Deploy
       os: linux
-      script: scripts/travis/deploy_packages.sh
+      script:
+        - scripts/travis/deploy_packages.sh
+        - scripts/travis/test_release.sh
     - # same stage, parallel job
       name: MacOS Deploy
       os: osx
@@ -144,24 +161,43 @@ jobs:
       script:
         - scripts/travis/external_build.sh ./scripts/travis/deploy_packages.sh
 
-    - stage: post_deploy
-      os: linux
-      name: Test Release Builds
-      script:
-        - scripts/travis/test_release.sh
-      addons:
-        apt:
-          packages:
-            - awscli
-
 # Don't rebuild libsodium every time
 cache:
   directories:
     - crypto/lib
 
 before_install:
-  # Disable sometimes-broken sources.list in Travis base images
-  - sudo rm -vf /etc/apt/sources.list.d/*
+- |-
+   case $TRAVIS_OS_NAME in
+   linux)
+     # Disable sometimes-broken sources.list in Travis base images
+     sudo rm -vf /etc/apt/sources.list.d/*
+     ;;
+   windows)
+     [[ ! -f C:/tools/msys64/msys2_shell.cmd ]] && rm -rf C:/tools/msys64
+     choco uninstall -y mingw
+     choco upgrade --no-progress -y msys2
+     export msys2='cmd //C RefreshEnv.cmd '
+     export msys2+='& set MSYS=winsymlinks:nativestrict '
+     export msys2+='& C:\\tools\\msys64\\msys2_shell.cmd -defterm -no-start'
+     export mingw64="$msys2 -mingw64 -full-path -here -c "\"\$@"\" --"
+     export msys2+=" -msys2 -c "\"\$@"\" --"
+     $msys2 pacman --sync --noconfirm --needed mingw-w64-x86_64-toolchain unzip
+     ## Install more MSYS2 packages from https://packages.msys2.org/base here
+     taskkill //IM gpg-agent.exe //F  # https://travis-ci.community/t/4967
+     export PATH=/C/tools/msys64/mingw64/bin:$PATH
+     export MAKE=mingw32-make  # so that Autotools can find it
+     ;;
+   esac
+
+before_cache:
+- |-
+   case $TRAVIS_OS_NAME in
+   windows)
+     # https://unix.stackexchange.com/a/137322/107554
+     $msys2 pacman --sync --clean --noconfirm
+     ;;
+   esac
 
 addons:
   apt:
@@ -175,7 +211,7 @@ addons:
   artifacts:
     s3_region: "us-east-1"
     paths:
-      - $(git ls-files -o | grep -v crypto/libsodium-fork | grep -v crypto/lib/ | grep -v ^gen/ | grep -v swagger.json.validated | tr "\n" ":")
+      - $(git ls-files -o | grep -v crypto/libs | grep -v crypto/copies | grep -v crypto/libsodium-fork | grep -v crypto/lib/ | grep -v ^gen/ | grep -v swagger.json.validated | tr "\n" ":")
 
 notifications:
   slack:

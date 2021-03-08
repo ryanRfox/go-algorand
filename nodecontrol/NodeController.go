@@ -1,4 +1,4 @@
-// Copyright (C) 2019 Algorand, Inc.
+// Copyright (C) 2019-2021 Algorand, Inc.
 // This file is part of go-algorand
 //
 // go-algorand is free software: you can redistribute it and/or modify
@@ -21,6 +21,8 @@ import (
 	"path/filepath"
 	"syscall"
 	"time"
+
+	"github.com/algorand/go-algorand/util"
 )
 
 // NodeController provides an object for controlling a specific algod node instance
@@ -50,6 +52,10 @@ func MakeNodeController(binDir, algodDataDir string) NodeController {
 	return nc
 }
 
+// AlgodExitErrorCallback is the callback function from the node controller that reports upstream
+// in case there was a change with the algod running state.
+type AlgodExitErrorCallback func(*NodeController, error)
+
 // AlgodStartArgs are the possible arguments for starting algod
 type AlgodStartArgs struct {
 	PeerAddress       string
@@ -57,6 +63,7 @@ type AlgodStartArgs struct {
 	RedirectOutput    bool
 	RunUnderHost      bool
 	TelemetryOverride string
+	ExitErrorCallback AlgodExitErrorCallback
 }
 
 // KMDStartArgs are the possible arguments for starting kmd
@@ -89,15 +96,15 @@ func (nc *NodeController) FullStart(args NodeStartArgs) (algodAlreadyRunning, km
 
 // FullStop stops both algod and kmd, if they're running
 func (nc NodeController) FullStop() error {
-	_, _, err := nc.stopProcesses()
+	_, err := nc.stopProcesses()
 	return err
 }
 
 // stopProcesses attempts to read PID files for algod and kmd and kill the
 // corresponding processes. If it can't read a PID file, it doesn't return an
 // error, but if it reads a PID file and the process doesn't die, it does
-func (nc NodeController) stopProcesses() (algodAlreadyStopped, kmdAlreadyStopped bool, err error) {
-	algodAlreadyStopped, err = nc.StopAlgod()
+func (nc NodeController) stopProcesses() (kmdAlreadyStopped bool, err error) {
+	err = nc.StopAlgod()
 	if err != nil {
 		return
 	}
@@ -111,7 +118,7 @@ func killPID(pid int) error {
 		return err
 	}
 
-	err = syscall.Kill(pid, syscall.SIGTERM)
+	err = util.KillProcess(pid, syscall.SIGTERM)
 	if err != nil {
 		return err
 	}
@@ -124,7 +131,7 @@ func killPID(pid int) error {
 		}
 		select {
 		case <-waitLong:
-			return syscall.Kill(pid, syscall.SIGKILL)
+			return util.KillProcess(pid, syscall.SIGKILL)
 		case <-time.After(time.Millisecond * 100):
 		}
 	}

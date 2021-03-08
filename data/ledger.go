@@ -1,4 +1,4 @@
-// Copyright (C) 2019 Algorand, Inc.
+// Copyright (C) 2019-2021 Algorand, Inc.
 // This file is part of go-algorand
 //
 // go-algorand is free software: you can redistribute it and/or modify
@@ -18,6 +18,7 @@ package data
 
 import (
 	"fmt"
+	"sync/atomic"
 	"time"
 
 	"github.com/algorand/go-algorand/agreement"
@@ -26,11 +27,10 @@ import (
 	"github.com/algorand/go-algorand/data/basics"
 	"github.com/algorand/go-algorand/data/bookkeeping"
 	"github.com/algorand/go-algorand/data/committee"
-	"github.com/algorand/go-algorand/data/pools"
 	"github.com/algorand/go-algorand/data/transactions"
 	"github.com/algorand/go-algorand/ledger"
+	"github.com/algorand/go-algorand/ledger/ledgercore"
 	"github.com/algorand/go-algorand/logging"
-	"github.com/algorand/go-algorand/logging/telemetryspec"
 	"github.com/algorand/go-algorand/protocol"
 )
 
@@ -45,6 +45,35 @@ type Ledger struct {
 	*ledger.Ledger
 
 	log logging.Logger
+
+	// a two-item moving window cache for the total number of online circulating coins
+	lastRoundCirculation atomic.Value
+	// a two-item moving window cache for the round seed
+	lastRoundSeed atomic.Value
+}
+
+// roundCirculationPair used to hold a pair of matching round number and the amount of online money
+type roundCirculationPair struct {
+	round       basics.Round
+	onlineMoney basics.MicroAlgos
+}
+
+// roundCirculation is the cache for the circulating coins
+type roundCirculation struct {
+	// elements holds several round-onlineMoney pairs
+	elements [2]roundCirculationPair
+}
+
+// roundSeedPair is the cache for a single seed at a given round
+type roundSeedPair struct {
+	round basics.Round
+	seed  committee.Seed
+}
+
+// roundSeed is the cache for the seed
+type roundSeed struct {
+	// elements holds several round-seed pairs
+	elements [2]roundSeedPair
 }
 
 func makeGenesisBlock(proto protocol.ConsensusVersion, genesisBal GenesisBalances, genesisID string, genesisHash crypto.Digest) (bookkeeping.Block, error) {
@@ -60,9 +89,14 @@ func makeGenesisBlock(proto protocol.ConsensusVersion, genesisBal GenesisBalance
 		FeeSink:                   genesisBal.feeSink,
 		RewardsPool:               genesisBal.rewardsPool,
 		RewardsLevel:              0,
-		RewardsRate:               incentivePoolBalanceAtGenesis.Raw / uint64(params.RewardsRateRefreshInterval),
 		RewardsResidue:            0,
 		RewardsRecalculationRound: basics.Round(params.RewardsRateRefreshInterval),
+	}
+
+	if params.InitialRewardsRateCalculation {
+		genesisRewardsState.RewardsRate = basics.SubSaturate(incentivePoolBalanceAtGenesis.Raw, params.MinBalance) / uint64(params.RewardsRateRefreshInterval)
+	} else {
+		genesisRewardsState.RewardsRate = incentivePoolBalanceAtGenesis.Raw / uint64(params.RewardsRateRefreshInterval)
 	}
 
 	genesisProtoState := bookkeeping.UpgradeState{
@@ -74,7 +108,7 @@ func makeGenesisBlock(proto protocol.ConsensusVersion, genesisBal GenesisBalance
 			Round:        0,
 			Branch:       bookkeeping.BlockHash{},
 			Seed:         committee.Seed(genesisHash),
-			TxnRoot:      transactions.Payset{}.Commit(params.PaysetCommitFlat),
+			TxnRoot:      transactions.Payset{}.CommitGenesis(),
 			TimeStamp:    genesisBal.timestamp,
 			GenesisID:    genesisID,
 			RewardsState: genesisRewardsState,
@@ -95,7 +129,7 @@ func makeGenesisBlock(proto protocol.ConsensusVersion, genesisBal GenesisBalance
 func LoadLedger(
 	log logging.Logger, dbFilenamePrefix string, memory bool,
 	genesisProto protocol.ConsensusVersion, genesisBal GenesisBalances, genesisID string, genesisHash crypto.Digest,
-	blockListeners []ledger.BlockListener, isArchival bool,
+	blockListeners []ledger.BlockListener, cfg config.Local,
 ) (*Ledger, error) {
 	if genesisBal.balances == nil {
 		genesisBal.balances = make(map[basics.Address]basics.AccountData)
@@ -123,7 +157,7 @@ func LoadLedger(
 	}
 	l.log.Debugf("Initializing Ledger(%s)", dbFilenamePrefix)
 
-	ll, err := ledger.OpenLedger(log, dbFilenamePrefix, memory, genesisInitState, isArchival)
+	ll, err := ledger.OpenLedger(log, dbFilenamePrefix, memory, genesisInitState, cfg)
 	if err != nil {
 		return nil, err
 	}
@@ -143,7 +177,6 @@ func (l *Ledger) AddressTxns(id basics.Address, r basics.Round) ([]transactions.
 		FeeSink:     blk.FeeSink,
 		RewardsPool: blk.RewardsPool,
 	}
-	proto := config.Consensus[blk.CurrentProtocol]
 
 	var res []transactions.SignedTxnWithAD
 	payset, err := blk.DecodePaysetFlat()
@@ -151,7 +184,7 @@ func (l *Ledger) AddressTxns(id basics.Address, r basics.Round) ([]transactions.
 		return nil, err
 	}
 	for _, tx := range payset {
-		if tx.Txn.MatchAddress(id, spec, proto) {
+		if tx.Txn.MatchAddress(id, spec) {
 			res = append(res, tx)
 		}
 	}
@@ -189,24 +222,32 @@ func (l *Ledger) NextRound() basics.Round {
 	return l.LastRound() + 1
 }
 
-// BalanceRecord implements Ledger.BalanceRecord. It applies pending rewards to returned amounts.
-func (l *Ledger) BalanceRecord(r basics.Round, addr basics.Address) (basics.BalanceRecord, error) {
-	data, err := l.Lookup(r, addr)
-	if err != nil {
-		return basics.BalanceRecord{}, err
-	}
-
-	return basics.BalanceRecord{
-		Addr:        addr,
-		AccountData: data,
-	}, nil
-}
-
 // Circulation implements agreement.Ledger.Circulation.
 func (l *Ledger) Circulation(r basics.Round) (basics.MicroAlgos, error) {
+	circulation, cached := l.lastRoundCirculation.Load().(roundCirculation)
+	if cached && r != basics.Round(0) {
+		for _, element := range circulation.elements {
+			if element.round == r {
+				return element.onlineMoney, nil
+			}
+		}
+	}
+
 	totals, err := l.Totals(r)
 	if err != nil {
 		return basics.MicroAlgos{}, err
+	}
+
+	if !cached || r > circulation.elements[1].round {
+		l.lastRoundCirculation.Store(
+			roundCirculation{
+				elements: [2]roundCirculationPair{
+					circulation.elements[1],
+					{
+						round:       r,
+						onlineMoney: totals.Online.Money},
+				},
+			})
 	}
 
 	return totals.Online.Money, nil
@@ -217,10 +258,33 @@ func (l *Ledger) Circulation(r basics.Round) (basics.MicroAlgos, error) {
 // I/O error.
 // Implements agreement.Ledger.Seed
 func (l *Ledger) Seed(r basics.Round) (committee.Seed, error) {
+	seed, cached := l.lastRoundSeed.Load().(roundSeed)
+	if cached && r != basics.Round(0) {
+		for _, roundSeed := range seed.elements {
+			if roundSeed.round == r {
+				return roundSeed.seed, nil
+			}
+		}
+	}
+
 	blockhdr, err := l.BlockHdr(r)
 	if err != nil {
 		return committee.Seed{}, err
 	}
+
+	if !cached || r > seed.elements[1].round {
+		l.lastRoundSeed.Store(
+			roundSeed{
+				elements: [2]roundSeedPair{
+					seed.elements[1],
+					{
+						round: r,
+						seed:  blockhdr.Seed,
+					},
+				},
+			})
+	}
+
 	return blockhdr.Seed, nil
 }
 
@@ -249,15 +313,53 @@ func (l *Ledger) ConsensusParams(r basics.Round) (config.ConsensusParams, error)
 }
 
 // ConsensusVersion gives the consensus version agreed on in a given round,
-// returning an error if we don't have that round or we have an
-// I/O error.
+// returning an error if the consensus version could not be figured using
+// either the block header for the given round, or the latest block header.
 // Implements agreement.Ledger.ConsensusVersion
 func (l *Ledger) ConsensusVersion(r basics.Round) (protocol.ConsensusVersion, error) {
 	blockhdr, err := l.BlockHdr(r)
-	if err != nil {
+	if err == nil {
+		return blockhdr.UpgradeState.CurrentProtocol, nil
+	}
+	// try to see if we can figure out what the version would be.
+	latestRound := l.Latest()
+	// if the request round was for an older round, then just say the we don't know.
+	if r < latestRound {
 		return "", err
 	}
-	return blockhdr.UpgradeState.CurrentProtocol, nil
+	// the request was for a future round. See if we have any known plans for the next round.
+	latestBlockhdr, err := l.BlockHdr(latestRound)
+	// if we have the lastest block header, look inside and try to figure out if we can deduce the
+	// protocol version for the given round.
+	if err == nil {
+		// check to see if we have a protocol upgrade.
+		if latestBlockhdr.NextProtocolSwitchOn == 0 {
+			// no protocol upgrade taking place, we have *at least* UpgradeVoteRounds before the protocol version would get changed.
+			// it's safe to ignore the error case here since we know that we couldn't reached to this "known" round
+			// without having the binary supporting this protocol version.
+			currentConsensusParams, _ := config.Consensus[latestBlockhdr.CurrentProtocol]
+			// we're using <= here since there is no current upgrade on this round, and if there will be one on the subsequent round
+			// it would still be correct until (latestBlockhdr.Round + currentConsensusParams.UpgradeVoteRounds)
+			if r <= latestBlockhdr.Round+basics.Round(currentConsensusParams.UpgradeVoteRounds) {
+				return latestBlockhdr.CurrentProtocol, nil
+			}
+			// otherwise, we can't really tell.
+			return "", ledgercore.ErrNoEntry{Round: r, Latest: latestRound, Committed: latestRound}
+		}
+		// in this case, we do have a protocol upgrade taking place.
+		if r < latestBlockhdr.NextProtocolSwitchOn {
+			// if we're in the voting duration or uprade waiting period, then the protocol version is the current version.
+			return latestBlockhdr.CurrentProtocol, nil
+		}
+		// if the requested round aligns with the protocol version switch version and we've passed the voting period, then we know that on the switching round
+		// we will be using the next protocol.
+		if r == latestBlockhdr.NextProtocolSwitchOn && latestBlockhdr.Round >= latestBlockhdr.NextProtocolVoteBefore {
+			return latestBlockhdr.NextProtocol, nil
+		}
+		err = ledgercore.ErrNoEntry{Round: r, Latest: latestRound, Committed: latestRound}
+	}
+	// otherwise, we can't really tell what the protocol version would be at round r.
+	return "", err
 }
 
 // EnsureValidatedBlock ensures that the block, and associated certificate c, are
@@ -275,7 +377,7 @@ func (l *Ledger) EnsureValidatedBlock(vb *ledger.ValidatedBlock, c agreement.Cer
 		logfn := logging.Base().Errorf
 
 		switch err.(type) {
-		case ledger.BlockInLedgerError:
+		case ledgercore.BlockInLedgerError:
 			logfn = logging.Base().Debugf
 		}
 
@@ -286,6 +388,7 @@ func (l *Ledger) EnsureValidatedBlock(vb *ledger.ValidatedBlock, c agreement.Cer
 // EnsureBlock ensures that the block, and associated certificate c, are
 // written to the ledger, or that some other block for the same round is
 // written to the ledger.
+// This function can be called concurrently.
 func (l *Ledger) EnsureBlock(block *bookkeeping.Block, c agreement.Certificate) {
 	round := block.Round()
 	protocolErrorLogged := false
@@ -302,7 +405,7 @@ func (l *Ledger) EnsureBlock(block *bookkeeping.Block, c agreement.Certificate) 
 				logging.Base().Errorf("unrecoverable protocol error detected at block %d: %v", round, err)
 				protocolErrorLogged = true
 			}
-		case ledger.BlockInLedgerError:
+		case ledgercore.BlockInLedgerError:
 			logging.Base().Debugf("could not write block %d to the ledger: %v", round, err)
 			return // this error implies that l.LastRound() >= round
 		default:
@@ -312,102 +415,4 @@ func (l *Ledger) EnsureBlock(block *bookkeeping.Block, c agreement.Certificate) 
 		// If there was an error add a short delay before the next attempt.
 		time.Sleep(100 * time.Millisecond)
 	}
-}
-
-// AssemblePayset adds transactions to a BlockEvaluator.
-func (l *Ledger) AssemblePayset(pool *pools.TransactionPool, eval *ledger.BlockEvaluator, deadline time.Time) (stats telemetryspec.AssembleBlockStats) {
-	pending := pool.Pending()
-	stats.StartCount = len(pending)
-	stats.StopReason = telemetryspec.AssembleBlockEmpty
-	first := true
-	totalFees := uint64(0)
-
-	// retrieve a list of all the previously known txid in the current round. We want to retrieve it here so we could avoid
-	// exercising the ledger read lock.
-	prevRoundTxIds := l.GetRoundTxIds(l.Latest())
-
-	for len(pending) > 0 {
-		txgroup := pending[0]
-		pending = pending[1:]
-
-		if len(txgroup) == 0 {
-			stats.InvalidCount++
-			continue
-		}
-
-		// if we already had this tx in the previous round, and haven't removed it yet from the txpool, that's fine.
-		// just skip that one.
-		if prevRoundTxIds[txgroup[0].ID()] {
-			stats.EarlyCommittedCount++
-			continue
-		}
-
-		if time.Now().After(deadline) {
-			stats.StopReason = telemetryspec.AssembleBlockTimeout
-			break
-		}
-
-		txgroupad := make([]transactions.SignedTxnWithAD, len(txgroup))
-		for i, tx := range txgroup {
-			txgroupad[i].SignedTxn = tx
-		}
-		err := eval.TransactionGroup(txgroupad)
-		if err == ledger.ErrNoSpace {
-			stats.StopReason = telemetryspec.AssembleBlockFull
-			break
-		}
-		if err != nil {
-			// GOAL2-255: Don't warn for common case of txn already being in ledger
-			switch err.(type) {
-			case ledger.TransactionInLedgerError:
-				stats.CommittedCount++
-			case transactions.MinFeeError:
-				stats.InvalidCount++
-				logging.Base().Infof("Cannot add pending transaction to block: %v", err)
-			default:
-				stats.InvalidCount++
-				logging.Base().Warnf("Cannot add pending transaction to block: %v", err)
-			}
-		} else {
-			for _, txn := range txgroup {
-				fee := txn.Txn.Fee.Raw
-				encodedLen := txn.GetEncodedLength()
-				priority := uint64(txn.PtrPriority())
-
-				stats.IncludedCount++
-				totalFees += fee
-
-				if first {
-					first = false
-					stats.MinFee = fee
-					stats.MaxFee = fee
-					stats.MinLength = encodedLen
-					stats.MaxLength = encodedLen
-					stats.MinPriority = priority
-					stats.MaxPriority = priority
-				} else {
-					if fee < stats.MinFee {
-						stats.MinFee = fee
-					} else if fee > stats.MaxFee {
-						stats.MaxFee = fee
-					}
-					if encodedLen < stats.MinLength {
-						stats.MinLength = encodedLen
-					} else if encodedLen > stats.MaxLength {
-						stats.MaxLength = encodedLen
-					}
-					if priority < stats.MinPriority {
-						stats.MinPriority = priority
-					} else if priority > stats.MaxPriority {
-						stats.MaxPriority = priority
-					}
-				}
-				stats.TotalLength += uint64(encodedLen)
-			}
-		}
-	}
-	if stats.IncludedCount != 0 {
-		stats.AverageFee = totalFees / uint64(stats.IncludedCount)
-	}
-	return
 }

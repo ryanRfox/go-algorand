@@ -1,4 +1,4 @@
-// Copyright (C) 2019 Algorand, Inc.
+// Copyright (C) 2019-2021 Algorand, Inc.
 // This file is part of go-algorand
 //
 // go-algorand is free software: you can redistribute it and/or modify
@@ -42,7 +42,7 @@ import (
 	"github.com/algorand/go-algorand/util/execpool"
 )
 
-var expectedAgreementTime = 2*config.Protocol.BigLambda + 3*config.Protocol.SmallLambda + 2*time.Second
+var expectedAgreementTime = 2*config.Protocol.BigLambda + config.Protocol.SmallLambda + config.Consensus[protocol.ConsensusCurrentVersion].AgreementFilterTimeout + 2*time.Second
 
 var sinkAddr = basics.Address{0x7, 0xda, 0xcb, 0x4b, 0x6d, 0x9e, 0xd1, 0x41, 0xb1, 0x75, 0x76, 0xbd, 0x45, 0x9a, 0xe6, 0x42, 0x1d, 0x48, 0x6d, 0xa3, 0xd4, 0xef, 0x22, 0x47, 0xc4, 0x9, 0xa3, 0x96, 0xb8, 0x2e, 0xa2, 0x21}
 var poolAddr = basics.Address{0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff}
@@ -55,7 +55,7 @@ var defaultConfig = config.Local{
 	IncomingConnectionsLimit: -1,
 }
 
-func setupFullNodes(t *testing.T, proto protocol.ConsensusVersion, verificationPool execpool.BacklogPool) ([]*AlgorandFullNode, []string, []string) {
+func setupFullNodes(t *testing.T, proto protocol.ConsensusVersion, verificationPool execpool.BacklogPool, customConsensus config.ConsensusProtocols) ([]*AlgorandFullNode, []string, []string) {
 	util.RaiseRlimit(1000)
 	f, _ := os.Create(t.Name() + ".log")
 	logging.Base().SetJSONFormatter()
@@ -84,9 +84,11 @@ func setupFullNodes(t *testing.T, proto protocol.ConsensusVersion, verificationP
 	// because we explicitly generated the sqlite database above (in
 	// installFullNode).
 	g := bookkeeping.Genesis{
-		SchemaID: "go-test-node-genesis",
-		Proto:    proto,
-		Network:  config.Devtestnet,
+		SchemaID:    "go-test-node-genesis",
+		Proto:       proto,
+		Network:     config.Devtestnet,
+		FeeSink:     sinkAddr.String(),
+		RewardsPool: poolAddr.String(),
 	}
 
 	for i := range wallets {
@@ -115,6 +117,7 @@ func setupFullNodes(t *testing.T, proto protocol.ConsensusVersion, verificationP
 			panic(err)
 		}
 		root, err := account.GenerateRoot(access)
+		access.Close()
 		if err != nil {
 			panic(err)
 		}
@@ -125,6 +128,7 @@ func setupFullNodes(t *testing.T, proto protocol.ConsensusVersion, verificationP
 			panic(err)
 		}
 		part, err := account.FillDBWithParticipationKeys(access, root.Address(), firstRound, lastRound, config.Consensus[protocol.ConsensusCurrentVersion].DefaultKeyDilution)
+		access.Close()
 		if err != nil {
 			panic(err)
 		}
@@ -144,10 +148,18 @@ func setupFullNodes(t *testing.T, proto protocol.ConsensusVersion, verificationP
 	for i, rootDirectory := range rootDirs {
 		genesisDir := filepath.Join(rootDirectory, g.ID())
 		ledgerFilenamePrefix := filepath.Join(genesisDir, config.LedgerFilenamePrefix)
+		if customConsensus != nil {
+			err := config.SaveConfigurableConsensus(genesisDir, customConsensus)
+			require.Nil(t, err)
+		}
+		err1 := config.LoadConfigurableConsensusProtocols(genesisDir)
+		require.Nil(t, err1)
 		nodeID := fmt.Sprintf("Node%d", i)
 		const inMem = false
-		const archival = true
-		_, err := data.LoadLedger(logging.Base().With("name", nodeID), ledgerFilenamePrefix, inMem, g.Proto, bootstrap, "", crypto.Digest{}, nil, archival)
+		cfg, err := config.LoadConfigFromDisk(rootDirectory)
+		require.NoError(t, err)
+		cfg.Archival = true
+		_, err = data.LoadLedger(logging.Base().With("name", nodeID), ledgerFilenamePrefix, inMem, g.Proto, bootstrap, "", crypto.Digest{}, nil, cfg)
 		require.NoError(t, err)
 	}
 
@@ -156,7 +168,7 @@ func setupFullNodes(t *testing.T, proto protocol.ConsensusVersion, verificationP
 		cfg, err := config.LoadConfigFromDisk(rootDirectory)
 		require.NoError(t, err)
 
-		node, err := MakeFull(logging.Base().With("source", t.Name()+strconv.Itoa(i)), rootDirectory, cfg, "", g)
+		node, err := MakeFull(logging.Base().With("source", t.Name()+strconv.Itoa(i)), rootDirectory, cfg, []string{}, g)
 		nodes[i] = node
 		require.NoError(t, err)
 	}
@@ -170,7 +182,7 @@ func TestSyncingFullNode(t *testing.T) {
 	backlogPool := execpool.MakeBacklog(nil, 0, execpool.LowPriority, nil)
 	defer backlogPool.Shutdown()
 
-	nodes, wallets, rootDirs := setupFullNodes(t, protocol.ConsensusCurrentVersion, backlogPool)
+	nodes, wallets, rootDirs := setupFullNodes(t, protocol.ConsensusCurrentVersion, backlogPool, nil)
 	for i := 0; i < len(nodes); i++ {
 		defer os.Remove(wallets[i])
 		defer os.RemoveAll(rootDirs[i])
@@ -227,7 +239,7 @@ func TestInitialSync(t *testing.T) {
 	backlogPool := execpool.MakeBacklog(nil, 0, execpool.LowPriority, nil)
 	defer backlogPool.Shutdown()
 
-	nodes, wallets, rootdirs := setupFullNodes(t, protocol.ConsensusCurrentVersion, backlogPool)
+	nodes, wallets, rootdirs := setupFullNodes(t, protocol.ConsensusCurrentVersion, backlogPool, nil)
 	for i := 0; i < len(nodes); i++ {
 		defer os.Remove(wallets[i])
 		defer os.RemoveAll(rootdirs[i])
@@ -255,12 +267,46 @@ func TestInitialSync(t *testing.T) {
 }
 
 func TestSimpleUpgrade(t *testing.T) {
-	t.Skip("Randomly failing: node_test.go:~283 : no block notification for account. Re-enable after agreement bug-fix pass")
+	t.Skip("Randomly failing: node_test.go:~330 : no block notification for account. Re-enable after agreement bug-fix pass")
 
 	backlogPool := execpool.MakeBacklog(nil, 0, execpool.LowPriority, nil)
 	defer backlogPool.Shutdown()
 
-	nodes, wallets, rootDirs := setupFullNodes(t, protocol.ConsensusTest0, backlogPool)
+	// ConsensusTest0 is a version of ConsensusV0 used for testing
+	// (it has different approved upgrade paths).
+	const consensusTest0 = protocol.ConsensusVersion("test0")
+
+	// ConsensusTest1 is an extension of ConsensusTest0 that
+	// supports a sorted-list balance commitment.
+	const consensusTest1 = protocol.ConsensusVersion("test1")
+
+	configurableConsensus := make(config.ConsensusProtocols)
+
+	testParams0 := config.Consensus[protocol.ConsensusCurrentVersion]
+	testParams0.SupportGenesisHash = false
+	testParams0.UpgradeVoteRounds = 2
+	testParams0.UpgradeThreshold = 1
+	testParams0.DefaultUpgradeWaitRounds = 2
+	testParams0.MaxVersionStringLen = 64
+	testParams0.MaxTxnBytesPerBlock = 1000000
+	testParams0.DefaultKeyDilution = 10000
+	testParams0.ApprovedUpgrades = map[protocol.ConsensusVersion]uint64{
+		consensusTest1: 0,
+	}
+	configurableConsensus[consensusTest0] = testParams0
+
+	testParams1 := config.Consensus[protocol.ConsensusCurrentVersion]
+	testParams1.SupportGenesisHash = false
+	testParams1.UpgradeVoteRounds = 10
+	testParams1.UpgradeThreshold = 8
+	testParams1.DefaultUpgradeWaitRounds = 10
+	testParams1.MaxVersionStringLen = 64
+	testParams1.MaxTxnBytesPerBlock = 1000000
+	testParams1.DefaultKeyDilution = 10000
+	testParams1.ApprovedUpgrades = map[protocol.ConsensusVersion]uint64{}
+	configurableConsensus[consensusTest1] = testParams1
+
+	nodes, wallets, rootDirs := setupFullNodes(t, consensusTest0, backlogPool, configurableConsensus)
 	for i := 0; i < len(nodes); i++ {
 		defer os.Remove(wallets[i])
 		defer os.RemoveAll(rootDirs[i])
@@ -301,7 +347,7 @@ func TestSimpleUpgrade(t *testing.T) {
 			roundsCheckedForUpgrade++
 
 			for i := range wallets {
-				require.Equal(t, protocol.ConsensusTest0, blocks[i].CurrentProtocol)
+				require.Equal(t, consensusTest0, blocks[i].CurrentProtocol)
 			}
 		}
 
@@ -310,7 +356,7 @@ func TestSimpleUpgrade(t *testing.T) {
 			roundsCheckedForUpgrade++
 
 			for i := range wallets {
-				require.Equal(t, protocol.ConsensusTest1, blocks[i].CurrentProtocol)
+				require.Equal(t, consensusTest1, blocks[i].CurrentProtocol)
 			}
 		}
 	}
@@ -347,7 +393,7 @@ func connectPeers(nodes []*AlgorandFullNode) {
 	}
 
 	for _, node := range nodes {
-		node.ExtendPeerList(neighbors...)
+		//		node.ExtendPeerList(neighbors...)
 		node.net.RequestConnectOutgoing(false, nil)
 	}
 }
@@ -362,9 +408,9 @@ func delayStartNode(node *AlgorandFullNode, peers []*AlgorandFullNode, delay tim
 	}()
 	wg.Wait()
 
-	node0Addr := node.config.NetAddress
+	//	node0Addr := node.config.NetAddress
 	for _, peer := range peers {
-		peer.ExtendPeerList(node0Addr)
+		//		peer.ExtendPeerList(node0Addr)
 		peer.net.RequestConnectOutgoing(false, nil)
 	}
 }
@@ -412,4 +458,41 @@ func TestStatusReport_TimeSinceLastRound(t *testing.T) {
 			}
 		})
 	}
+}
+
+type mismatchingDirectroyPermissionsLog struct {
+	logging.Logger
+	t *testing.T
+}
+
+func (m mismatchingDirectroyPermissionsLog) Errorf(fmts string, args ...interface{}) {
+	fmtStr := fmt.Sprintf(fmts, args...)
+	require.Contains(m.t, fmtStr, "Unable to create genesis directroy")
+}
+
+// TestMismatchingGenesisDirectoryPermissions tests to see that the os.MkDir check we have in MakeFull works as expected. It tests both the return error as well as the logged error.
+func TestMismatchingGenesisDirectoryPermissions(t *testing.T) {
+	testDirectroy, err := ioutil.TempDir(os.TempDir(), t.Name())
+	require.NoError(t, err)
+
+	genesis := bookkeeping.Genesis{
+		SchemaID:    "go-test-node-genesis",
+		Proto:       protocol.ConsensusCurrentVersion,
+		Network:     config.Devtestnet,
+		FeeSink:     sinkAddr.String(),
+		RewardsPool: poolAddr.String(),
+	}
+
+	log := mismatchingDirectroyPermissionsLog{logging.TestingLog(t), t}
+
+	require.NoError(t, os.Chmod(testDirectroy, 0200))
+
+	node, err := MakeFull(log, testDirectroy, config.GetDefaultLocal(), []string{}, genesis)
+
+	require.Nil(t, node)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "permission denied")
+
+	require.NoError(t, os.Chmod(testDirectroy, 1700))
+	require.NoError(t, os.RemoveAll(testDirectroy))
 }

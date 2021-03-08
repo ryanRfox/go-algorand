@@ -1,4 +1,4 @@
-// Copyright (C) 2019 Algorand, Inc.
+// Copyright (C) 2019-2021 Algorand, Inc.
 // This file is part of go-algorand
 //
 // go-algorand is free software: you can redistribute it and/or modify
@@ -30,8 +30,9 @@ const maximumAPITokenLength = 256
 
 // API tokens that live in the datadirs of their respective daemons
 const (
-	AlgodTokenFilename = "algod.token"
-	KmdTokenFilename   = "kmd.token"
+	AlgodTokenFilename      = "algod.token"
+	AlgodAdminTokenFilename = "algod.admin.token"
+	KmdTokenFilename        = "kmd.token"
 )
 
 func tokenFilepath(dataDir, tokenFilename string) string {

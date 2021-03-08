@@ -1,4 +1,4 @@
-// Copyright (C) 2019 Algorand, Inc.
+// Copyright (C) 2019-2021 Algorand, Inc.
 // This file is part of go-algorand
 //
 // go-algorand is free software: you can redistribute it and/or modify
@@ -47,14 +47,16 @@ func BenchmarkServiceFetchBlocks(b *testing.B) {
 
 	net := &mocks.MockNetwork{}
 
+	cfg := config.GetDefaultLocal()
+	cfg.Archival = true
+
 	for i := 0; i < b.N; i++ {
-		archival := true
 		inMem := true
-		local, err := data.LoadLedger(logging.Base(), b.Name()+"empty"+strconv.Itoa(i), inMem, protocol.ConsensusCurrentVersion, genesisBalances, "", crypto.Digest{}, nil, archival)
+		local, err := data.LoadLedger(logging.Base(), b.Name()+"empty"+strconv.Itoa(i), inMem, protocol.ConsensusCurrentVersion, genesisBalances, "", crypto.Digest{}, nil, cfg)
 		require.NoError(b, err)
 
 		// Make Service
-		syncer := MakeService(logging.Base(), defaultConfig, net, local, nil, new(mockedAuthenticator))
+		syncer := MakeService(logging.Base(), defaultConfig, net, local, new(mockedAuthenticator), nil)
 		syncer.fetcherFactory = makeMockFactory(&MockedFetcher{ledger: remote, timeout: false, tries: make(map[basics.Round]int), latency: 100 * time.Millisecond, predictable: true})
 
 		b.StartTimer()
@@ -129,8 +131,9 @@ func benchenv(t testing.TB, numAccounts, numBlocks int) (ledger, emptyLedger *da
 	var err error
 	genesisBalances = data.MakeGenesisBalances(genesis, sinkAddr, poolAddr)
 	const inMem = true
-	const archival = true
-	emptyLedger, err = data.LoadLedger(logging.Base(), t.Name()+"empty", inMem, protocol.ConsensusCurrentVersion, genesisBalances, "", crypto.Digest{}, nil, archival)
+	cfg := config.GetDefaultLocal()
+	cfg.Archival = true
+	emptyLedger, err = data.LoadLedger(logging.Base(), t.Name()+"empty", inMem, protocol.ConsensusCurrentVersion, genesisBalances, "", crypto.Digest{}, nil, cfg)
 	require.NoError(t, err)
 
 	ledger, err = datatest.FabricateLedger(logging.Base(), t.Name(), parts, genesisBalances, emptyLedger.LastRound()+basics.Round(numBlocks))

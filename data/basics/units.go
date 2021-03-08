@@ -1,4 +1,4 @@
-// Copyright (C) 2019 Algorand, Inc.
+// Copyright (C) 2019-2021 Algorand, Inc.
 // This file is part of go-algorand
 //
 // go-algorand is free software: you can redistribute it and/or modify
@@ -17,9 +17,11 @@
 package basics
 
 import (
+	"github.com/algorand/go-codec/codec"
+	"github.com/algorand/msgp/msgp"
+
 	"github.com/algorand/go-algorand/config"
 	"github.com/algorand/go-algorand/crypto"
-	"github.com/algorand/go-codec/codec"
 )
 
 // RoundInterval is a number of rounds
@@ -56,6 +58,11 @@ func (a MicroAlgos) RewardUnits(proto config.ConsensusParams) uint64 {
 	return a.Raw / proto.RewardUnit
 }
 
+// We generate our own encoders and decoders for MicroAlgos
+// because we want it to appear as an integer, even though
+// we represent it as a single-element struct.
+//msgp:ignore MicroAlgos
+
 // CodecEncodeSelf implements codec.Selfer to encode MicroAlgos as a simple int
 func (a MicroAlgos) CodecEncodeSelf(enc *codec.Encoder) {
 	enc.MustEncode(a.Raw)
@@ -64,6 +71,41 @@ func (a MicroAlgos) CodecEncodeSelf(enc *codec.Encoder) {
 // CodecDecodeSelf implements codec.Selfer to decode MicroAlgos as a simple int
 func (a *MicroAlgos) CodecDecodeSelf(dec *codec.Decoder) {
 	dec.MustDecode(&a.Raw)
+}
+
+// CanMarshalMsg implements msgp.Marshaler
+func (MicroAlgos) CanMarshalMsg(z interface{}) bool {
+	_, ok := (z).(MicroAlgos)
+	return ok
+}
+
+// MarshalMsg implements msgp.Marshaler
+func (a MicroAlgos) MarshalMsg(b []byte) (o []byte) {
+	o = msgp.Require(b, msgp.Uint64Size)
+	o = msgp.AppendUint64(o, a.Raw)
+	return
+}
+
+// CanUnmarshalMsg implements msgp.Unmarshaler
+func (*MicroAlgos) CanUnmarshalMsg(z interface{}) bool {
+	_, ok := (z).(*MicroAlgos)
+	return ok
+}
+
+// UnmarshalMsg implements msgp.Unmarshaler
+func (a *MicroAlgos) UnmarshalMsg(bts []byte) (o []byte, err error) {
+	a.Raw, o, err = msgp.ReadUint64Bytes(bts)
+	return
+}
+
+// Msgsize returns an upper bound estimate of the number of bytes occupied by the serialized message
+func (a MicroAlgos) Msgsize() (s int) {
+	return msgp.Uint64Size
+}
+
+// MsgIsZero returns whether this is a zero value
+func (a MicroAlgos) MsgIsZero() bool {
+	return a.Raw == 0
 }
 
 // Round represents a protocol round index
@@ -79,7 +121,7 @@ func OneTimeIDForRound(round Round, keyDilution uint64) crypto.OneTimeSignatureI
 	}
 }
 
-// SubSaturate subtracts two rounds with saturation arithmetic that does not
+// SubSaturate subtracts x rounds with saturation arithmetic that does not
 // wrap around past zero, and instead returns 0 on underflow.
 func (round Round) SubSaturate(x Round) Round {
 	if round < x {
@@ -87,4 +129,9 @@ func (round Round) SubSaturate(x Round) Round {
 	}
 
 	return round - x
+}
+
+// RoundUpToMultipleOf rounds up round to the next multiple of n.
+func (round Round) RoundUpToMultipleOf(n Round) Round {
+	return (round + n - 1) / n * n
 }

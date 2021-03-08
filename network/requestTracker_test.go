@@ -1,4 +1,4 @@
-// Copyright (C) 2019 Algorand, Inc.
+// Copyright (C) 2019-2021 Algorand, Inc.
 // This file is part of go-algorand
 //
 // go-algorand is free software: you can redistribute it and/or modify
@@ -45,7 +45,7 @@ func TestHostIncomingRequestsOrdering(t *testing.T) {
 	now := time.Now()
 	perm := rand.Perm(100)
 	for i := 0; i < 100; i++ {
-		trackedRequest := makeTrackerRequest("remoteaddr", "host", "port", now.Add(time.Duration(perm[i])*time.Minute))
+		trackedRequest := makeTrackerRequest("remoteaddr", "host", "port", now.Add(time.Duration(perm[i])*time.Minute), nil)
 		hir.add(trackedRequest)
 	}
 	require.Equal(t, 100, len(hir.requests))
@@ -78,7 +78,7 @@ func TestRateLimiting(t *testing.T) {
 	wn := &WebsocketNetwork{
 		log:       log,
 		config:    defaultConfig,
-		phonebook: MakeMultiPhonebook(),
+		phonebook: MakePhonebook(1, 1),
 		GenesisID: "go-test-network-genesis",
 		NetworkID: config.Devtestnet,
 	}
@@ -95,8 +95,6 @@ func TestRateLimiting(t *testing.T) {
 
 	defer func() { t.Log("stopping A"); netA.Stop(); t.Log("A done") }()
 
-	counter := newMessageCounter(t, 5)
-	netA.RegisterHandlers([]TaggedMessageHandler{TaggedMessageHandler{Tag: debugTag, MessageHandler: counter}})
 	netA.Start()
 	addrA, postListen := netA.Address()
 	require.Truef(t, postListen, "Listening network failed to start")
@@ -107,14 +105,15 @@ func TestRateLimiting(t *testing.T) {
 	clientsCount := int(defaultConfig.ConnectionsRateLimitingCount + 5)
 
 	networks := make([]*WebsocketNetwork, clientsCount)
-	phonebooks := make([]*ThreadsafePhonebook, clientsCount)
+	phonebooks := make([]Phonebook, clientsCount)
 	for i := 0; i < clientsCount; i++ {
 		networks[i] = makeTestWebsocketNodeWithConfig(t, noAddressConfig)
 		networks[i].config.GossipFanout = 1
-		phonebooks[i] = MakeThreadsafePhonebook()
-		phonebooks[i].ReplacePeerList([]string{addrA})
-		networks[i].phonebook = MakeMultiPhonebook()
-		networks[i].phonebook.AddOrUpdatePhonebook("default", phonebooks[i])
+		phonebooks[i] = MakePhonebook(networks[i].config.ConnectionsRateLimitingCount,
+			time.Duration(networks[i].config.ConnectionsRateLimitingWindowSeconds)*time.Second)
+		phonebooks[i].ReplacePeerList([]string{addrA}, "default", PhoneBookEntryRelayRole)
+		networks[i].phonebook = MakePhonebook(1, 1*time.Millisecond)
+		networks[i].phonebook.ReplacePeerList([]string{addrA}, "default", PhoneBookEntryRelayRole)
 		defer func(net *WebsocketNetwork, i int) {
 			t.Logf("stopping network %d", i)
 			net.Stop()
@@ -144,7 +143,7 @@ func TestRateLimiting(t *testing.T) {
 			case <-readyCh:
 				// it's closed, so this client got connected.
 				connectedClients++
-				phonebookLen := len(phonebooks[i].GetAddresses(1))
+				phonebookLen := len(phonebooks[i].GetAddresses(1, PhoneBookEntryRelayRole))
 				// if this channel is ready, than we should have an address, since it didn't get blocked.
 				require.Equal(t, 1, phonebookLen)
 			default:

@@ -1,4 +1,4 @@
-// Copyright (C) 2019 Algorand, Inc.
+// Copyright (C) 2019-2021 Algorand, Inc.
 // This file is part of go-algorand
 //
 // go-algorand is free software: you can redistribute it and/or modify
@@ -295,7 +295,7 @@ func TestSignTransaction(t *testing.T) {
 	// Request a signature
 	req1 := kmdapi.APIV1POSTTransactionSignRequest{
 		WalletHandleToken: walletHandleToken,
-		Transaction:       protocol.Encode(tx),
+		Transaction:       protocol.Encode(&tx),
 		WalletPassword:    f.WalletPassword,
 	}
 	resp1 := kmdapi.APIV1POSTTransactionSignResponse{}
@@ -399,7 +399,7 @@ func BenchmarkSignTransaction(b *testing.B) {
 			// Request a signature
 			req1 := kmdapi.APIV1POSTTransactionSignRequest{
 				WalletHandleToken: walletHandleToken,
-				Transaction:       protocol.Encode(tx),
+				Transaction:       protocol.Encode(&tx),
 				WalletPassword:    f.WalletPassword,
 			}
 			resp1 := kmdapi.APIV1POSTTransactionSignResponse{}

@@ -1,4 +1,4 @@
-// Copyright (C) 2019 Algorand, Inc.
+// Copyright (C) 2019-2021 Algorand, Inc.
 // This file is part of go-algorand
 //
 // go-algorand is free software: you can redistribute it and/or modify
@@ -39,7 +39,7 @@ import (
 type HTTPTxSync struct {
 	rootURL string
 
-	peers PeerSource
+	peers network.GossipNode
 
 	log logging.Logger
 
@@ -47,8 +47,11 @@ type HTTPTxSync struct {
 }
 
 const requestContentType = "application/x-www-form-urlencoded"
+const baseResponseReadingBufferSize = uint64(1024)
 
-func responseBytes(response *http.Response, log logging.Logger, limit uint64) (data []byte, err error) {
+// ResponseBytes reads the content of the response object and return the body content
+// while obeying the read size limits
+func ResponseBytes(response *http.Response, log logging.Logger, limit uint64) (data []byte, err error) {
 	// response.Body is always non-nil
 	defer response.Body.Close()
 	if response.ContentLength >= 0 {
@@ -60,7 +63,7 @@ func responseBytes(response *http.Response, log logging.Logger, limit uint64) (d
 		_, err = io.ReadFull(response.Body, data)
 		return
 	}
-	slurper := network.LimitedReaderSlurper{Limit: limit}
+	slurper := network.MakeLimitedReaderSlurper(baseResponseReadingBufferSize, limit)
 	err = slurper.Read(response.Body)
 	if err == network.ErrIncomingMsgTooLarge {
 		log.Errorf("response too large: %d > %d", slurper.Size(), limit)
@@ -72,7 +75,7 @@ func responseBytes(response *http.Response, log logging.Logger, limit uint64) (d
 }
 
 // create a new http sync object.
-func makeHTTPSync(peerSource PeerSource, log logging.Logger, serverResponseSize uint64) *HTTPTxSync {
+func makeHTTPSync(peerSource network.GossipNode, log logging.Logger, serverResponseSize uint64) *HTTPTxSync {
 	const transactionArrayEncodingOverhead = uint64(16) // manual tests shown that the actual extra packing cost is typically 3 bytes. We'll take 16 byte to ensure we're on the safe side.
 	return &HTTPTxSync{
 		peers:                  peerSource,
@@ -91,7 +94,7 @@ func (hts *HTTPTxSync) Sync(ctx context.Context, bloom *bloom.Filter) (txgroups 
 	}
 	bloomParam := base64.URLEncoding.EncodeToString(bloomBytes)
 
-	peers := hts.peers.GetPeers(network.PeersPhonebook)
+	peers := hts.peers.GetPeers(network.PeersPhonebookRelays)
 	if len(peers) == 0 {
 		return nil, nil //errors.New("no peers to tx sync from")
 	}
@@ -103,14 +106,15 @@ func (hts *HTTPTxSync) Sync(ctx context.Context, bloom *bloom.Filter) (txgroups 
 	hts.rootURL = hpeer.GetAddress()
 	client := hpeer.GetHTTPClient()
 	if client == nil {
-		client = http.DefaultClient
+		client = &http.Client{}
+		client.Transport = hts.peers.GetRoundTripper()
 	}
 	parsedURL, err := network.ParseHostOrURL(hts.rootURL)
 	if err != nil {
 		hts.log.Warnf("txSync bad url %v: %s", hts.rootURL, err)
 		return nil, err
 	}
-	parsedURL.Path = hpeer.PrepareURL(path.Join(parsedURL.Path, TxServiceHTTPPath))
+	parsedURL.Path = hts.peers.SubstituteGenesisID(path.Join(parsedURL.Path, TxServiceHTTPPath))
 	syncURL := parsedURL.String()
 	hts.log.Infof("http sync from %s", syncURL)
 	params := url.Values{}
@@ -137,7 +141,7 @@ func (hts *HTTPTxSync) Sync(ctx context.Context, bloom *bloom.Filter) (txgroups 
 	default:
 		hts.log.Warn("txSync response status code : ", response.StatusCode)
 		response.Body.Close()
-		return nil, fmt.Errorf("txSync POST error response status code %d", response.StatusCode)
+		return nil, fmt.Errorf("txSync POST error response status code %d for '%s'. Request bloom filter length was %d bytes", response.StatusCode, syncURL, len(bloomParam))
 	}
 
 	// at this point, we've already receieved the response headers. ensure that the
@@ -158,7 +162,7 @@ func (hts *HTTPTxSync) Sync(ctx context.Context, bloom *bloom.Filter) (txgroups 
 		return nil, fmt.Errorf("txSync POST invalid content type '%s'", contentTypes[0])
 	}
 
-	data, err := responseBytes(response, hts.log, hts.maxTxSyncResponseBytes)
+	data, err := ResponseBytes(response, hts.log, hts.maxTxSyncResponseBytes)
 	if err != nil {
 		hts.log.Warn("txSync body read failed: ", err)
 		return nil, err
@@ -166,7 +170,7 @@ func (hts *HTTPTxSync) Sync(ctx context.Context, bloom *bloom.Filter) (txgroups 
 	hts.log.Debugf("http sync got %d bytes", len(data))
 
 	var txns []transactions.SignedTxn
-	err = protocol.Decode(data, &txns)
+	err = protocol.DecodeReflect(data, &txns)
 	if err != nil {
 		hts.log.Warn("txSync protocol decode: ", err)
 	}

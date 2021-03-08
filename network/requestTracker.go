@@ -1,4 +1,4 @@
-// Copyright (C) 2019 Algorand, Inc.
+// Copyright (C) 2019-2021 Algorand, Inc.
 // This file is part of go-algorand
 //
 // go-algorand is free software: you can redistribute it and/or modify
@@ -46,10 +46,12 @@ type TrackerRequest struct {
 	otherTelemetryGUID string
 	otherInstanceName  string
 	otherPublicAddr    string
+	connection         net.Conn
+	noPrune            bool
 }
 
 // makeTrackerRequest creates a new TrackerRequest.
-func makeTrackerRequest(remoteAddr, remoteHost, remotePort string, createTime time.Time) *TrackerRequest {
+func makeTrackerRequest(remoteAddr, remoteHost, remotePort string, createTime time.Time, conn net.Conn) *TrackerRequest {
 	if remoteHost == "" {
 		remoteHost, remotePort, _ = net.SplitHostPort(remoteAddr)
 	}
@@ -59,13 +61,15 @@ func makeTrackerRequest(remoteAddr, remoteHost, remotePort string, createTime ti
 		remoteAddr: remoteAddr,
 		remoteHost: remoteHost,
 		remotePort: remotePort,
+		connection: conn,
 	}
 }
 
 // hostIncomingRequests holds all the requests that are originating from a single host.
 type hostIncomingRequests struct {
-	remoteHost string
-	requests   []*TrackerRequest // this is an ordered list, according to the requestsHistory.created
+	remoteHost             string
+	requests               []*TrackerRequest            // this is an ordered list, according to the requestsHistory.created
+	additionalHostRequests map[*TrackerRequest]struct{} // additional requests that aren't included in the "requests", and always assumed to be "alive".
 }
 
 // findTimestampIndex finds the first an index (i) in the sorted requests array, where requests[i].created is greater than t.
@@ -78,6 +82,45 @@ func (ard *hostIncomingRequests) findTimestampIndex(t time.Time) int {
 		return ard.requests[i].created.After(t)
 	})
 	return i
+}
+
+// convertToAdditionalRequest converts the given trackerRequest into a "additional request".
+// unlike regular tracker requests, additional requests does not get pruned.
+func (ard *hostIncomingRequests) convertToAdditionalRequest(trackerRequest *TrackerRequest) {
+	if _, has := ard.additionalHostRequests[trackerRequest]; has {
+		return
+	}
+
+	i := sort.Search(len(ard.requests), func(i int) bool {
+		return ard.requests[i].created.After(trackerRequest.created)
+	})
+	i--
+	if i < 0 {
+		return
+	}
+	// we could have several entries with the same timestamp, so we need to consider all of them.
+	for ; i >= 0; i-- {
+		if ard.requests[i] == trackerRequest {
+			break
+		}
+		if ard.requests[i].created != trackerRequest.created {
+			// we can't find the item in the list.
+			return
+		}
+	}
+	if i < 0 {
+		return
+	}
+	// ok, item was found at index i.
+	copy(ard.requests[i:], ard.requests[i+1:])
+	ard.requests[len(ard.requests)-1] = nil
+	ard.requests = ard.requests[:len(ard.requests)-1]
+	ard.additionalHostRequests[trackerRequest] = struct{}{}
+}
+
+// removeTrackedConnection removes a trackerRequest from the additional requests map
+func (ard *hostIncomingRequests) removeTrackedConnection(trackerRequest *TrackerRequest) {
+	delete(ard.additionalHostRequests, trackerRequest)
 }
 
 // add adds the trackerRequest at the correct index within the sorted array.
@@ -102,7 +145,7 @@ func (ard *hostIncomingRequests) add(trackerRequest *TrackerRequest) {
 // countConnections counts the number of connection that we have that occured after the provided specified time
 func (ard *hostIncomingRequests) countConnections(rateLimitingWindowStartTime time.Time) (count uint) {
 	i := ard.findTimestampIndex(rateLimitingWindowStartTime)
-	return uint(len(ard.requests) - i)
+	return uint(len(ard.requests) - i + len(ard.additionalHostRequests))
 }
 
 type hostsIncomingMap map[string]*hostIncomingRequests
@@ -136,8 +179,9 @@ func (him *hostsIncomingMap) addRequest(trackerRequest *TrackerRequest) {
 	requestData, has := (*him)[trackerRequest.remoteHost]
 	if !has {
 		requestData = &hostIncomingRequests{
-			remoteHost: trackerRequest.remoteHost,
-			requests:   make([]*TrackerRequest, 0, 1),
+			remoteHost:             trackerRequest.remoteHost,
+			requests:               make([]*TrackerRequest, 0, 1),
+			additionalHostRequests: make(map[*TrackerRequest]struct{}),
 		}
 		(*him)[trackerRequest.remoteHost] = requestData
 	}
@@ -151,6 +195,24 @@ func (him *hostsIncomingMap) countOriginConnections(remoteHost string, rateLimit
 		return requestData.countConnections(rateLimitingWindowStartTime)
 	}
 	return 0
+}
+
+// convertToAdditionalRequest converts the given trackerRequest into a "additional request".
+func (him *hostsIncomingMap) convertToAdditionalRequest(trackerRequest *TrackerRequest) {
+	requestData, has := (*him)[trackerRequest.remoteHost]
+	if !has {
+		return
+	}
+	requestData.convertToAdditionalRequest(trackerRequest)
+}
+
+// removeTrackedConnection removes a trackerRequest from the additional requests map
+func (him *hostsIncomingMap) removeTrackedConnection(trackerRequest *TrackerRequest) {
+	requestData, has := (*him)[trackerRequest.remoteHost]
+	if !has {
+		return
+	}
+	requestData.removeTrackedConnection(trackerRequest)
 }
 
 // RequestTracker tracks the incoming request connections
@@ -185,6 +247,25 @@ func makeRequestsTracker(downstreamHandler http.Handler, log logging.Logger, con
 	}
 }
 
+// requestTrackedConnection used to track the active connections. In particular, it used to remove the
+// tracked connection entry from the RequestTracker once a connection is closed.
+type requestTrackedConnection struct {
+	net.Conn
+	tracker *RequestTracker
+}
+
+// Close removes the connection from the tracker's connections map and call the underlaying Close function.
+func (c *requestTrackedConnection) Close() error {
+	c.tracker.hostRequestsMu.Lock()
+	trackerRequest := c.tracker.acceptedConnections[c.Conn.LocalAddr()]
+	delete(c.tracker.acceptedConnections, c.Conn.LocalAddr())
+	if trackerRequest != nil {
+		c.tracker.hostRequests.removeTrackedConnection(trackerRequest)
+	}
+	c.tracker.hostRequestsMu.Unlock()
+	return c.Conn.Close()
+}
+
 // Accept waits for and returns the next connection to the listener.
 func (rt *RequestTracker) Accept() (conn net.Conn, err error) {
 	// the following for loop is a bit tricky :
@@ -196,7 +277,7 @@ func (rt *RequestTracker) Accept() (conn net.Conn, err error) {
 			return
 		}
 
-		trackerRequest := makeTrackerRequest(conn.RemoteAddr().String(), "", "", time.Now())
+		trackerRequest := makeTrackerRequest(conn.RemoteAddr().String(), "", "", time.Now(), conn)
 		rateLimitingWindowStartTime := trackerRequest.created.Add(-time.Duration(rt.config.ConnectionsRateLimitingWindowSeconds) * time.Second)
 
 		rt.hostRequestsMu.Lock()
@@ -219,7 +300,10 @@ func (rt *RequestTracker) Accept() (conn net.Conn, err error) {
 			// we've already *doubled* the amount of allowed connections; disconnect right away.
 			// we don't want to create more go routines beyond this point.
 			if originConnections > rt.config.ConnectionsRateLimitingCount*2 {
-				conn.Close()
+				err := conn.Close()
+				if err != nil {
+					rt.log.With("connection", "tcp").With("count", originConnections).Debugf("Failed to close connection : %v", err)
+				}
 			} else {
 				// we want to make an attempt to read the connection reqest and send a response, but not within this go routine -
 				// this go routine is used single-threaded and should not get blocked.
@@ -232,14 +316,29 @@ func (rt *RequestTracker) Accept() (conn net.Conn, err error) {
 		// add an entry to the acceptedConnections so that the ServeHTTP could find the connection quickly.
 		rt.acceptedConnections[conn.LocalAddr()] = trackerRequest
 		rt.hostRequestsMu.Unlock()
+		conn = &requestTrackedConnection{Conn: conn, tracker: rt}
 		return
 	}
 }
 
 // sendBlockedConnectionResponse reads the incoming connection request followed by sending a "too many requests" response.
 func (rt *RequestTracker) sendBlockedConnectionResponse(conn net.Conn, requestTime time.Time) {
-	conn.SetReadDeadline(requestTime.Add(500 * time.Millisecond))
-	conn.SetWriteDeadline(requestTime.Add(500 * time.Millisecond))
+	defer func() {
+		err := conn.Close()
+		if err != nil {
+			rt.log.With("connection", "tcp").Debugf("Failed to close connection of blocked connection response: %v", err)
+		}
+	}()
+	err := conn.SetReadDeadline(requestTime.Add(500 * time.Millisecond))
+	if err != nil {
+		rt.log.With("connection", "tcp").Debugf("Failed to set a read deadline of blocked connection response: %v", err)
+		return
+	}
+	err = conn.SetWriteDeadline(requestTime.Add(500 * time.Millisecond))
+	if err != nil {
+		rt.log.With("connection", "tcp").Debugf("Failed to set a write deadline of blocked connection response: %v", err)
+		return
+	}
 	var dummyBuffer [1024]byte
 	var readingErr error
 	for readingErr == nil {
@@ -249,16 +348,20 @@ func (rt *RequestTracker) sendBlockedConnectionResponse(conn net.Conn, requestTi
 	// http handler can handle, or getting requests that fails before the header retrieval is complete.
 	// in this case, we want to send our response right away and disconnect. If the client is currently still sending it's request, it might not know how to handle
 	// this correctly. This use case is similar to the issue handled by the go-server in the same manner. ( see "431 Request Header Fields Too Large" in the server.go )
-	conn.Write([]byte(
+	_, err = conn.Write([]byte(
 		fmt.Sprintf("HTTP/1.1 %d %s\r\nContent-Type: text/plain; charset=utf-8\r\nConnection: close\r\n%s: %d\r\n\r\n", http.StatusTooManyRequests, http.StatusText(http.StatusTooManyRequests), TooManyRequestsRetryAfterHeader, rt.config.ConnectionsRateLimitingWindowSeconds)))
-	conn.Close()
+	if err != nil {
+		rt.log.With("connection", "tcp").Debugf("Failed to write response to a blocked connection response: %v", err)
+		return
+	}
 }
 
 // pruneAcceptedConnections clean stale items form the acceptedConnections map; it's syncornized via the acceptedConnectionsMu mutex which is expected to be taken by the caller.
+// in case the created is 0, the pruning is disabled for this connection. The HTTP handlers would call Close to have this entry cleared out.
 func (rt *RequestTracker) pruneAcceptedConnections(pruneStartDate time.Time) {
 	localAddrToRemove := []net.Addr{}
 	for localAddr, request := range rt.acceptedConnections {
-		if request.created.Before(pruneStartDate) {
+		if request.noPrune == false && request.created.Before(pruneStartDate) {
 			localAddrToRemove = append(localAddrToRemove, localAddr)
 		}
 	}
@@ -292,6 +395,14 @@ func (rt *RequestTracker) GetTrackedRequest(request *http.Request) (trackedReque
 	return rt.httpConnections[localAddr]
 }
 
+// GetRequestConnection return the underlying connection for the given request
+func (rt *RequestTracker) GetRequestConnection(request *http.Request) net.Conn {
+	rt.httpConnectionsMu.Lock()
+	defer rt.httpConnectionsMu.Unlock()
+	localAddr := request.Context().Value(http.LocalAddrContextKey).(net.Addr)
+	return rt.httpConnections[localAddr].connection
+}
+
 func (rt *RequestTracker) ServeHTTP(response http.ResponseWriter, request *http.Request) {
 	// this function is called only after we've fetched all the headers. on some malicious clients, this could get delayed, so we can't rely on the
 	// tcp-connection established time to align with current time.
@@ -302,16 +413,20 @@ func (rt *RequestTracker) ServeHTTP(response http.ResponseWriter, request *http.
 
 	rt.hostRequestsMu.Lock()
 	trackedRequest := rt.acceptedConnections[localAddr]
-	delete(rt.acceptedConnections, localAddr)
 	if trackedRequest != nil {
+		// update the original tracker request so that it won't get pruned.
+		if trackedRequest.noPrune == false {
+			trackedRequest.noPrune = true
+			rt.hostRequests.convertToAdditionalRequest(trackedRequest)
+		}
 		// create a copy, so we can unlock
-		trackedRequest = makeTrackerRequest(trackedRequest.remoteAddr, trackedRequest.remoteHost, trackedRequest.remotePort, trackedRequest.created)
+		trackedRequest = makeTrackerRequest(trackedRequest.remoteAddr, trackedRequest.remoteHost, trackedRequest.remotePort, trackedRequest.created, trackedRequest.connection)
 	}
 	rt.hostRequestsMu.Unlock()
 
 	// we have no request tracker ? no problem; create one on the fly.
 	if trackedRequest == nil {
-		trackedRequest = makeTrackerRequest(request.RemoteAddr, "", "", time.Now())
+		trackedRequest = makeTrackerRequest(request.RemoteAddr, "", "", time.Now(), nil)
 	}
 
 	// update the origin address.

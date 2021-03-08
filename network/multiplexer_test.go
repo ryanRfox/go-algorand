@@ -1,4 +1,4 @@
-// Copyright (C) 2019 Algorand, Inc.
+// Copyright (C) 2019-2021 Algorand, Inc.
 // This file is part of go-algorand
 //
 // go-algorand is free software: you can redistribute it and/or modify
@@ -54,8 +54,7 @@ func (th *testHandler) SawMsg(msg IncomingMessage) bool {
 }
 
 func TestMultiplexer(t *testing.T) {
-	m := MakeMultiplexer()
-	m.log = logging.TestingLog(t)
+	m := MakeMultiplexer(logging.TestingLog(t))
 	handler := &testHandler{}
 
 	// Handler shouldn't be called before it is registered
@@ -66,7 +65,7 @@ func TestMultiplexer(t *testing.T) {
 	}
 
 	// Registering our handler should succeed
-	m.RegisterHandlers([]TaggedMessageHandler{TaggedMessageHandler{protocol.TxnTag, handler}})
+	m.RegisterHandlers([]TaggedMessageHandler{{protocol.TxnTag, handler}})
 
 	// Can't register two handlers for the same typetag
 	panicked := false
@@ -76,9 +75,8 @@ func TestMultiplexer(t *testing.T) {
 				panicked = true
 			}
 		}()
-		m := MakeMultiplexer()
-		m.log = logging.TestingLog(t)
-		m.RegisterHandlers([]TaggedMessageHandler{TaggedMessageHandler{protocol.TxnTag, handler}, TaggedMessageHandler{protocol.TxnTag, handler}})
+		m := MakeMultiplexer(logging.TestingLog(t))
+		m.RegisterHandlers([]TaggedMessageHandler{{protocol.TxnTag, handler}, {protocol.TxnTag, handler}})
 
 	}()
 	require.True(t, panicked)
@@ -89,10 +87,9 @@ func TestMultiplexer(t *testing.T) {
 				panicked = true
 			}
 		}()
-		m := MakeMultiplexer()
-		m.log = logging.TestingLog(t)
-		m.RegisterHandlers([]TaggedMessageHandler{TaggedMessageHandler{protocol.TxnTag, handler}})
-		m.RegisterHandlers([]TaggedMessageHandler{TaggedMessageHandler{protocol.TxnTag, handler}})
+		m := MakeMultiplexer(logging.TestingLog(t))
+		m.RegisterHandlers([]TaggedMessageHandler{{protocol.TxnTag, handler}})
+		m.RegisterHandlers([]TaggedMessageHandler{{protocol.TxnTag, handler}})
 
 	}()
 	require.True(t, panicked)
@@ -114,7 +111,7 @@ func TestMultiplexer(t *testing.T) {
 	handler.Reset()
 
 	// After deregistering, should not get any more incoming messages
-	m.ClearHandlers()
+	m.ClearHandlers([]Tag{})
 	msg5 := makeSignedTxnMsg()
 	m.Handle(msg5)
 	require.False(t, handler.SawMsg(msg5))

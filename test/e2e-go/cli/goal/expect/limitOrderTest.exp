@@ -18,7 +18,10 @@ if { [catch {
     set NETWORK_TEMPLATE "$TEST_DATA_DIR/nettemplates/TwoNodes50EachFuture.json"
 
     # Create network
-    ::AlgorandGoal::StartNetwork $NETWORK_NAME $NETWORK_TEMPLATE $TEST_ALGO_DIR $TEST_ROOT_DIR
+    ::AlgorandGoal::CreateNetwork $NETWORK_NAME $NETWORK_TEMPLATE $TEST_ALGO_DIR $TEST_ROOT_DIR
+
+    # Start network
+    ::AlgorandGoal::StartNetwork $NETWORK_NAME $NETWORK_TEMPLATE $TEST_ROOT_DIR
 
     set PRIMARY_NODE_ADDRESS [ ::AlgorandGoal::GetAlgodNetworkAddress $TEST_PRIMARY_NODE_DIR ]
     puts "Primary Node Address: $PRIMARY_NODE_ADDRESS"
@@ -59,12 +62,12 @@ if { [catch {
     ::AlgorandGoal::VerifyAccount $WALLET_2_NAME $WALLET_2_PASSWORD $ACCOUNT_2_ADDRESS $TEST_PRIMARY_NODE_DIR
 
     # -------------------------- setup accounts ----------------------------------
-    
+
     # Transfer Algos from primary account to account 1
     set MIN_BALANCE 1000000
     set TRANSFER_AMOUNT  [expr {1000 * $MIN_BALANCE}]
     set FEE_AMOUNT 1000
-    set TRANSACTION_ID [::AlgorandGoal::AccountTransfer $PRIMARY_WALLET_NAME "" $PRIMARY_ACCOUNT_ADDRESS $TRANSFER_AMOUNT $ACCOUNT_1_ADDRESS $FEE_AMOUNT $TEST_PRIMARY_NODE_DIR]
+    set TRANSACTION_ID [::AlgorandGoal::AccountTransfer $PRIMARY_WALLET_NAME "" $PRIMARY_ACCOUNT_ADDRESS $TRANSFER_AMOUNT $ACCOUNT_1_ADDRESS $FEE_AMOUNT $TEST_PRIMARY_NODE_DIR ""]
 
     # Print the transaction id
     puts "TRANSACTION_ID 1: $TRANSACTION_ID"
@@ -73,7 +76,7 @@ if { [catch {
     ::AlgorandGoal::WaitForAccountBalance $WALLET_1_NAME $ACCOUNT_1_ADDRESS $TRANSFER_AMOUNT $TEST_PRIMARY_NODE_DIR
 
     # Transfer Algos from primary account to account 2
-    set TRANSACTION_ID [::AlgorandGoal::AccountTransfer $PRIMARY_WALLET_NAME "" $PRIMARY_ACCOUNT_ADDRESS $TRANSFER_AMOUNT $ACCOUNT_2_ADDRESS $FEE_AMOUNT $TEST_PRIMARY_NODE_DIR]
+    set TRANSACTION_ID [::AlgorandGoal::AccountTransfer $PRIMARY_WALLET_NAME "" $PRIMARY_ACCOUNT_ADDRESS $TRANSFER_AMOUNT $ACCOUNT_2_ADDRESS $FEE_AMOUNT $TEST_PRIMARY_NODE_DIR ""]
 
     # Print the transaction id
     puts "TRANSACTION_ID 2: $TRANSACTION_ID"
@@ -86,7 +89,7 @@ if { [catch {
     # create duckcoin
     set TOTAL_SUPPLY 1000000000
     set UNIT_NAME "duckcoin"
-    ::AlgorandGoal::AssetCreate $ACCOUNT_1_ADDRESS $WALLET_1_NAME $WALLET_1_PASSWORD $TOTAL_SUPPLY $UNIT_NAME $TEST_PRIMARY_NODE_DIR
+    ::AlgorandGoal::AssetCreate $ACCOUNT_1_ADDRESS $WALLET_1_NAME $WALLET_1_PASSWORD $TOTAL_SUPPLY 0 "" $UNIT_NAME $TEST_PRIMARY_NODE_DIR
 
     # wait about 4 rounds
     set ASSET_CREATE_WAIT 20
@@ -99,7 +102,6 @@ if { [catch {
 
     # allow account 2 to accept this asset by sending 0 duckcoin to self
     ::AlgorandGoal::AssetTransfer $WALLET_2_NAME $WALLET_2_PASSWORD $ACCOUNT_2_ADDRESS $ACCOUNT_2_ADDRESS $ASSET_ID 0 $TEST_PRIMARY_NODE_DIR
-    
 
     # -------------------------- generate teal form template  ----------------------------------
 
@@ -108,7 +110,7 @@ if { [catch {
     puts "Current Dir: $WORK_DIR"
     set TEAL_DIR "$TEST_DATA_DIR/../../tools/teal"
     cd $TEAL_DIR
-        
+
     # generate teal assembly
     set SWAP_N 3
     set SWAP_D 2
@@ -124,15 +126,15 @@ if { [catch {
     expect {
 	    -re {^.+$} { close }
     }
-    
+
     # compile teal assembly to bytecode
     set CONTRACT_HASH [::AlgorandGoal::TealCompile $TEAL_SOURCE]
 
     # -------------------------- limit order  ----------------------------------
-    
+
     # initialize the escrow by sending 1000000 microAlgos into it
-    set CONTRACT_MICRO_ALGO 200000 
-    set TRANSACTION_ID [::AlgorandGoal::AccountTransfer $PRIMARY_WALLET_NAME "" $PRIMARY_ACCOUNT_ADDRESS $CONTRACT_MICRO_ALGO $CONTRACT_HASH $FEE_AMOUNT $TEST_PRIMARY_NODE_DIR]
+    set CONTRACT_MICRO_ALGO 200000
+    set TRANSACTION_ID [::AlgorandGoal::AccountTransfer $PRIMARY_WALLET_NAME "" $PRIMARY_ACCOUNT_ADDRESS $CONTRACT_MICRO_ALGO $CONTRACT_HASH $FEE_AMOUNT $TEST_PRIMARY_NODE_DIR ""]
     puts "Fund contract account on transaction $TRANSACTION_ID"
 
      # Check to make sure that the transfer is reflected in the to account
@@ -151,7 +153,7 @@ if { [catch {
 
     set LIMIT_CMB "$TEST_ROOT_DIR/limitcmb.tx"
     exec cat $LIMIT_TXN_1 $LIMIT_TXN_2 > $LIMIT_CMB
-  
+
     set GROUP_TX_UNSIGNED "$TEST_ROOT_DIR/limitgrp.tx"
     ::AlgorandGoal::AssembleGroup $LIMIT_CMB $GROUP_TX_UNSIGNED
 
@@ -159,7 +161,7 @@ if { [catch {
     # we must resplit the transaction (but this time they have the group fields set correctly)
 
     set RAW_TX "$TEST_ROOT_DIR/limitraw.tx"
-    exec goal clerk split -i $GROUP_TX_UNSIGNED -o $RAW_TX 
+    exec goal clerk split -i $GROUP_TX_UNSIGNED -o $RAW_TX
 
     set RAW_TX_0 "$TEST_ROOT_DIR/limitraw-0.tx"
     set RAW_TX_1 "$TEST_ROOT_DIR/limitraw-1.tx"
@@ -170,7 +172,7 @@ if { [catch {
     after 3000 set stop_wait &
     vwait stop_wait
     unset stop_wait
-    
+
     # regroup the transactions and send the combined signed transactions to the network
     set LIMIT_STX "$TEST_ROOT_DIR/limitraw.stx"
     exec cat $RAW_TX_0 $RAW_STX_1 > $LIMIT_STX
@@ -178,9 +180,9 @@ if { [catch {
 
     set RAW_TRANSACTION_ID [::AlgorandGoal::RawSend $LIMIT_STX $TEST_PRIMARY_NODE_DIR]
     puts "send limit order transaction in $RAW_TRANSACTION_ID"
-    
+
     # Shutdown the network
-    ::AlgorandGoal::StopNetwork $NETWORK_NAME $TEST_ALGO_DIR $TEST_ROOT_DIR
+    ::AlgorandGoal::StopNetwork $NETWORK_NAME $TEST_ROOT_DIR
 
     puts "Limit Order Test Successful"
 

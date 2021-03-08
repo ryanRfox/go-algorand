@@ -1,4 +1,4 @@
-// Copyright (C) 2019 Algorand, Inc.
+// Copyright (C) 2019-2021 Algorand, Inc.
 // This file is part of go-algorand
 //
 // go-algorand is free software: you can redistribute it and/or modify
@@ -90,7 +90,7 @@ func (uv unauthenticatedVote) verify(l LedgerReader) (vote, error) {
 	rv := uv.R
 	m, err := membership(l, rv.Sender, rv.Round, rv.Period, rv.Step)
 	if err != nil {
-		return vote{}, fmt.Errorf("unauthenticatedVote.verify: could not get membership parameters: %v", err)
+		return vote{}, fmt.Errorf("unauthenticatedVote.verify: could not get membership parameters: %w", err)
 	}
 
 	switch rv.Step {
@@ -100,14 +100,14 @@ func (uv unauthenticatedVote) verify(l LedgerReader) (vote, error) {
 		}
 		// The following check could apply to all steps, but it's sufficient to only check in the propose step.
 		if rv.Proposal.OriginalPeriod > rv.Period {
-			return vote{}, fmt.Errorf("unauthenticatedVote.verify: proposal-vote in period %v claims to repropose block from future period %v", rv.Period, rv.Proposal.OriginalPeriod)
+			return vote{}, fmt.Errorf("unauthenticatedVote.verify: proposal-vote in period %d claims to repropose block from future period %d", rv.Period, rv.Proposal.OriginalPeriod)
 		}
 		fallthrough
 	case soft:
 		fallthrough
 	case cert:
 		if rv.Proposal == bottom {
-			return vote{}, fmt.Errorf("unauthenticatedVote.verify: votes from step %v cannot validate bottom", rv.Step)
+			return vote{}, fmt.Errorf("unauthenticatedVote.verify: votes from step %d cannot validate bottom", rv.Step)
 		}
 	}
 
@@ -156,18 +156,18 @@ func makeVote(rv rawVote, voting crypto.OneTimeSigner, selection *crypto.VRFSecr
 		switch rv.Step {
 		case propose, soft, cert, late, redo:
 			if rv.Proposal == bottom {
-				logging.Base().Panicf("makeVote: votes from step %v cannot validate bottom", rv.Step)
+				logging.Base().Panicf("makeVote: votes from step %d cannot validate bottom", rv.Step)
 			}
 		case down:
 			if rv.Proposal != bottom {
-				logging.Base().Panicf("makeVote: votes from step %v must validate bottom", rv.Step)
+				logging.Base().Panicf("makeVote: votes from step %d must validate bottom", rv.Step)
 			}
 		}
 	} else {
 		switch rv.Step {
 		case propose, soft, cert:
 			if rv.Proposal == bottom {
-				logging.Base().Panicf("makeVote: votes from step %v cannot validate bottom", rv.Step)
+				logging.Base().Panicf("makeVote: votes from step %d cannot validate bottom", rv.Step)
 			}
 		}
 	}
@@ -184,7 +184,7 @@ func makeVote(rv rawVote, voting crypto.OneTimeSigner, selection *crypto.VRFSecr
 
 // ToBeHashed implements the Hashable interface.
 func (rv rawVote) ToBeHashed() (protocol.HashID, []byte) {
-	return protocol.Vote, protocol.Encode(rv)
+	return protocol.Vote, protocol.Encode(&rv)
 }
 
 func (v vote) u() unauthenticatedVote {
@@ -204,12 +204,12 @@ func (pair unauthenticatedEquivocationVote) verify(l LedgerReader) (equivocation
 
 	v0, err := uv0.verify(l)
 	if err != nil {
-		return equivocationVote{}, fmt.Errorf("unauthenticatedEquivocationVote.verify: failed to verify pair 0: %v", err)
+		return equivocationVote{}, fmt.Errorf("unauthenticatedEquivocationVote.verify: failed to verify pair 0: %w", err)
 	}
 
 	_, err = uv1.verify(l)
 	if err != nil {
-		return equivocationVote{}, fmt.Errorf("unauthenticatedEquivocationVote.verify: failed to verify pair 1: %v", err)
+		return equivocationVote{}, fmt.Errorf("unauthenticatedEquivocationVote.verify: failed to verify pair 1: %w", err)
 	}
 
 	return equivocationVote{

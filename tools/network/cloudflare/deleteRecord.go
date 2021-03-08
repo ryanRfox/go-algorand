@@ -1,4 +1,4 @@
-// Copyright (C) 2019 Algorand, Inc.
+// Copyright (C) 2019-2021 Algorand, Inc.
 // This file is part of go-algorand
 //
 // go-algorand is free software: you can redistribute it and/or modify
@@ -61,7 +61,7 @@ func parseDeleteDNSRecordResponse(response *http.Response) (*DeleteDNSRecordResp
 	}
 	var parsedResponse DeleteDNSRecordResponse
 	if err := json.Unmarshal(body, &parsedResponse); err != nil {
-		return nil, err
+		return nil, fmt.Errorf("failed to unmarshal response body '%s' : %v", string(body), err)
 	}
 	return &parsedResponse, nil
 }

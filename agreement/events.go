@@ -1,4 +1,4 @@
-// Copyright (C) 2019 Algorand, Inc.
+// Copyright (C) 2019-2021 Algorand, Inc.
 // This file is part of go-algorand
 //
 // go-algorand is free software: you can redistribute it and/or modify
@@ -68,6 +68,7 @@ type externalEvent interface {
 // type of the implementing struct.
 //
 //go:generate stringer -type=eventType
+//msgp:ignore eventType
 type eventType int
 
 const (
@@ -107,6 +108,8 @@ const (
 	// roundInterruption is emitted by the Ledger as input to the player
 	// state machine when an external source observes that the player's
 	// current round has completed concurrent with the player's operation.
+	// roundInterruption is also emitted (internally, by the player itself) after
+	// calling ensureBlock.
 	roundInterruption
 
 	// timeout is emitted by the Clock as input to the player state machine
@@ -633,6 +636,8 @@ type thresholdEvent struct {
 
 	// Bundle holds a quorum of votes which form the threshold.
 	Bundle unauthenticatedBundle
+
+	Proto protocol.ConsensusVersion
 }
 
 func (e thresholdEvent) t() eventType {
@@ -657,7 +662,7 @@ func (e thresholdEvent) ComparableStr() string {
 //
 // The ordering is given as follows:
 //
-//  - certThreshold events are fresher than all other events.
+//  - certThreshold events are fresher than all other non-certThreshold events.
 //  - Events from a later period are fresher than events from an older period.
 //  - nextThreshold events are fresher than softThreshold events from the same
 //    period.

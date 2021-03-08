@@ -1,4 +1,4 @@
-// Copyright (C) 2019 Algorand, Inc.
+// Copyright (C) 2019-2021 Algorand, Inc.
 // This file is part of go-algorand
 //
 // go-algorand is free software: you can redistribute it and/or modify
@@ -31,7 +31,7 @@ func init() {
 
 var rootCmd = &cobra.Command{
 	Use:   "algocfg",
-	Short: "tool for inspecting and updating algod's config.json file",
+	Short: "Tool for inspecting and updating algod's config.json file",
 	Args:  cobra.NoArgs,
 	Run: func(cmd *cobra.Command, args []string) {
 		cmd.HelpFunc()(cmd, args)

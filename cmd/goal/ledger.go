@@ -1,4 +1,4 @@
-// Copyright (C) 2019 Algorand, Inc.
+// Copyright (C) 2019-2021 Algorand, Inc.
 // This file is part of go-algorand
 //
 // go-algorand is free software: you can redistribute it and/or modify
@@ -46,7 +46,6 @@ func init() {
 var ledgerCmd = &cobra.Command{
 	Use:   "ledger",
 	Short: "Access ledger-related details",
-	Long:  "Access ledger-related details",
 	Args:  validateNoPosArgsFn,
 	Run: func(cmd *cobra.Command, args []string) {
 		// If no arguments passed, we should fallback to help
@@ -57,7 +56,7 @@ var ledgerCmd = &cobra.Command{
 var supplyCmd = &cobra.Command{
 	Use:   "supply",
 	Short: "Show ledger token supply",
-	Long:  "Show ledger token supply. All units are in microAlgos.",
+	Long:  `Show ledger token supply. All units are in microAlgos. The "Total Money" is all algos held by online+offline accounts (excludes non-participating accounts). The "Online Money" is the amount held solely by online accounts.`,
 	Args:  validateNoPosArgsFn,
 	Run: func(cmd *cobra.Command, _ []string) {
 		dataDir := ensureSingleDataDir()
@@ -73,7 +72,7 @@ var supplyCmd = &cobra.Command{
 var blockCmd = &cobra.Command{
 	Use:   "block [round number]",
 	Short: "Dump a block to a file or stdout",
-	Long:  "Dump a block to a file or stdout",
+	Long:  "Dump a block to a file or stdout. Default behavior is to attempt to decode the raw bytes returned from algod to JSON.",
 	Args:  cobra.ExactArgs(1),
 	Run: func(cmd *cobra.Command, args []string) {
 		round, err := strconv.ParseUint(args[0], 10, 64)

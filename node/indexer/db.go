@@ -1,4 +1,4 @@
-// Copyright (C) 2019 Algorand, Inc.
+// Copyright (C) 2019-2021 Algorand, Inc.
 // This file is part of go-algorand
 //
 // go-algorand is free software: you can redistribute it and/or modify
@@ -17,6 +17,7 @@
 package indexer
 
 import (
+	"context"
 	"database/sql"
 	"fmt"
 
@@ -100,7 +101,7 @@ func MakeIndexerDB(dbPath string, inMemory bool) (*DB, error) {
 
 // AddBlock takes an Algorand block and stores its transactions in the DB.
 func (idb *DB) AddBlock(b bookkeeping.Block) error {
-	err := idb.dbw.Atomic(func(tx *sql.Tx) error {
+	err := idb.dbw.Atomic(func(ctx context.Context, tx *sql.Tx) error {
 
 		// Get last block
 		rnd, err := idb.MaxRound()
@@ -124,7 +125,7 @@ func (idb *DB) AddBlock(b bookkeeping.Block) error {
 		}
 		for _, txad := range payset {
 			txn := txad.SignedTxn
-			_, err = stmt.Exec(txn.ID().String(), txn.Txn.Sender.String(), txn.Txn.Receiver.String(), b.Round(), b.TimeStamp)
+			_, err = stmt.Exec(txn.ID().String(), txn.Txn.Sender.String(), txn.Txn.GetReceiverAddress().String(), b.Round(), b.TimeStamp)
 			if err != nil {
 				return err
 			}
